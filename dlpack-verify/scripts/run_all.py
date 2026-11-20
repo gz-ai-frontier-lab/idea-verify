@@ -10,6 +10,7 @@ results/{dev}/run_all_<时间戳>.log (日志中每个阶段有明确横幅标�
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -22,39 +23,62 @@ PY = sys.executable
 
 
 def start_smi_sampler(dev, tag, out_dir, interval=1.0):
-    """P1 回退检测采样 (仅 NPU): 后台循环采集 npu-smi 的 AI Core/HBM 利用率到 CSV。
-    DeepSeek C/P 体系的 P1 一票否决门禁在真实 GNN 接入时执行; 本验证阶段做采样存证。
+    """P1 回退检测采样 (仅 NPU): 后台采集 npu-smi 的 AI Core/HBM 利用率到 CSV。
+    各版本 npu-smi 的 -t 参数差异较大: 按候选命令自适应探测, 锁定第一个输出含
+    AI Core 数值的命令; 全部失败时把完整帮助文本落盘 raw 列供人工定位。
     返回 (stop_event, csv_path); cpu 环境返回 None。"""
     if dev != "npu":
         return None
-    cmd = ["npu-smi", "info", "-t", "usage", "-i", "0"]
+    candidates = [
+        ["npu-smi", "info", "-t", "usage", "-i", "0"],
+        ["npu-smi", "info", "-t", "usages", "-i", "0"],
+        ["npu-smi", "info", "-t", "common", "-i", "0"],
+        ["npu-smi", "info", "-t", "board", "-i", "0"],
+        ["npu-smi", "info"],
+    ]
     ts = time.strftime("%Y%m%d_%H%M%S")
     path = os.path.join(out_dir, f"smi_{tag}_{ts}.csv")
     stop = threading.Event()
+    state = {"chosen": None}
 
     def parse(text):
         aicore = hbm = ""
         for line in text.splitlines():
             low = line.lower()
-            if "%" in line and ("aicore" in low or "hbm" in low):
-                digits = "".join(ch for ch in line if ch.isdigit() or ch == ".")
-                if "aicore" in low:
-                    aicore = digits
-                else:
-                    hbm = digits
-        return aicore, hbm, text.replace("\n", " ")[:200]
+            if ("aicore" in low or "ai core" in low) and any(c.isdigit() for c in line):
+                digits = re.findall(r"\d+\.?\d*", line)
+                aicore = digits[0] if digits else ""
+            elif "hbm" in low and any(c.isdigit() for c in line):
+                digits = re.findall(r"\d+\.?\d*", line)
+                hbm = digits[0] if digits else ""
+        return aicore, hbm
 
     def loop():
         with open(path, "w", encoding="utf-8") as f:
-            f.write("unix_ts,aicore_pct,hbm_pct,ok,raw\n")
+            f.write("unix_ts,cmd,aicore_pct,hbm_pct,ok,raw\n")
             while not stop.is_set():
-                try:
-                    out = subprocess.run(cmd, capture_output=True, text=True,
-                                         timeout=10).stdout
-                    a, h, raw = parse(out)
-                    f.write(f"{time.time()},{a},{h},{int(bool(a))},\"{raw}\"\n")
-                except Exception as e:  # noqa: BLE001
-                    f.write(f"{time.time()},,,0,\"{type(e).__name__}: {e}\"\n")
+                cmds = [state["chosen"]] if state["chosen"] else candidates
+                logged = False
+                for cmd in cmds:
+                    try:
+                        r = subprocess.run(cmd, capture_output=True, text=True,
+                                           timeout=10)
+                        out = (r.stdout or r.stderr or "").strip()
+                        a, h = parse(out)
+                        cmd_s = " ".join(cmd).replace('"', "'")
+                        if a != "":
+                            state["chosen"] = cmd
+                            f.write(f"{time.time()},'{cmd_s}',{a},{h},1,\n")
+                            logged = True
+                            break
+                        if not logged:
+                            safe = out.replace('"', "'")[:800]
+                            f.write(f"{time.time()},'{cmd_s}',,,0,\"{safe}\"\n")
+                    except Exception as e:  # noqa: BLE001
+                        if not logged:
+                            f.write(f"{time.time()},,,0,\"{type(e).__name__}: {e}\"\n")
+                if not logged:
+                    f.write(f"{time.time()},,,,0,\"no npu-smi candidate worked\"\n")
                 f.flush()
                 stop.wait(interval)
 
@@ -87,6 +111,10 @@ def build_stages(a):
          [os.path.join(SCRIPTS, "train_hybrid.py")] + common
          + ["--hidden", str(a.hidden), "--bench", "--bench-sizes", a.bench_sizes,
             "--bench-n", str(a.bench_n)]),
+        ("E6", "真实开源模型 GCN on Cora (PyG; B0/E2/E3, C4 用 Accuracy)",
+         [os.path.join(SCRIPTS, "gcn_hybrid.py"), "--device", a.device,
+          "--epochs", str(a.gcn_epochs), "--rtol", str(a.rtol),
+          "--seed", str(a.seed)]),
     ]
 
 
@@ -103,6 +131,7 @@ def main():
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--bench-sizes", default="128,4096,16384")
     ap.add_argument("--bench-n", type=int, default=200)
+    ap.add_argument("--gcn-epochs", type=int, default=200)
     a = ap.parse_args()
 
     dev = "cpu" if a.device == "cpu" else "npu"
@@ -133,7 +162,7 @@ def main():
             tee(f"### cmd: {PY} {cmd[0]} {' '.join(cmd[1:])}\n")
             tee("#" * 78 + "\n")
             sampler = start_smi_sampler(a.device, tag, out_dir) \
-                if tag in ("E2", "E3", "E4") else None
+                if tag in ("E2", "E3", "E4", "E6") else None
             if sampler:
                 tee(f"### [P1] npu-smi 回退检测采样已启动: {sampler[1]}\n")
             t0 = time.perf_counter()

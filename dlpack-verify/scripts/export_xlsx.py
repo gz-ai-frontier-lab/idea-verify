@@ -78,6 +78,7 @@ def export_xlsx(dev="npu", out_dir=None):
         ("train_summary_h64_copy.json", "E3 混合训练 copy"),
         ("train_summary_h64_dlpack_sym.json", "E4 对称形态 front_pt"),
         ("bench_summary.json", "E5 bench 尺寸扫描"),
+        ("gcn_summary_dlpack.json", "E6 GCN on Cora"),
     ]
     _write_table(ws, ["来源", "指标", "值"], [], bold)
     any_summary = False
