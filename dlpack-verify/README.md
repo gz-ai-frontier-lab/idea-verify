@@ -158,6 +158,8 @@ python scripts\make_report.py
 
 真机结果:待 910B 重跑后由 `make_report.py` 自动填充(报告 §4.4~§4.9:机制选型对照、切换等价性、形态对称性、梯度双锚、性能门禁)。E5 bench 与任务无关,已有真机基准值:基准尺寸(边界张量 32KB)正向 copy 慢 **13.6x**、回传 **9.4x**,1MB/4MB 档重跑后刷新。
 
+**真实开源模型验证(GCN on Cora)**:升级到真实开源模型——Kipf & Welling 两层 GCN + PyG Planetoid Cora(2708 节点/10556 边/1433 维/7 分类,数据随项目 `data/` 离线加载),切分点 = conv1 之后(边界 = 节点表示),B0 = 纯 MS 两层 GCN,C4 判据用 **test Accuracy**(GCN 规模下逐位一致不可达,一致性口径为 ulp 级 ≤1e-5 与趋势重合)。命令:`python scripts/gcn_hybrid.py --device npu --rtol 5e-3`(E3 加 `--exchange copy`),run_all 已含 E6 阶段。CPU 冒烟已复现 Kipf 公开水平(test_acc 80.3%,B0 80.3%,acc 差 0.00pt,一致性 ulp 级 ≤5.5e-7)。
+
 机制级补充:PYNATIVE GradOperation 反向会重执行一次前向(每步 2 次 MS 前向,固有行为)。已实装 `mindspore.vjp` 模式消除冗余前向(注意官方用法是 `vjp(fn, *inputs)`;标量输出可用标量种子 `bwd_fn(ms.Tensor(1.0))` 一次得全部输入梯度)。
 
 ## 6. 910B (Atlas A2) 移植指南
