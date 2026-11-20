@@ -1,5 +1,5 @@
 # Windows CPU verification env (pinned versions, official Python 3.10.11 + project venv)
-# Install (run inside E:\Code\Python\dlpack-verify):
+# Install (run inside E:\Codei-frontier-lab\idea-verify\dlpack-verify):
 #   python -m venv .venv                               (skip if .venv already exists)
 #   .venv\Scripts\activate.bat
 #   pip install -r requirements-cpu.txt -i https://repo.huaweicloud.com/repository/pypi/simple/
