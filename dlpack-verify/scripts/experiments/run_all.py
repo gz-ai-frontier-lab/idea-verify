@@ -119,36 +119,27 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
 def build_stages(a):
     """阶段表: (编号, 说明, 命令参数列表)。参数按各脚本的接口透传。"""
     common = ["--device", a.device]
-    train = (common + ["--steps", str(a.steps), "--hidden", str(a.hidden),
-                       "--batch", str(a.batch), "--lr", str(a.lr),
-                       "--rtol", str(a.rtol), "--eval-every", str(a.eval_every),
-                       "--seed", str(a.seed)])
+    gcn = (common + ["--epochs", str(a.epochs), "--hidden", str(a.hidden),
+                     "--lr", str(a.lr), "--weight-decay", str(a.weight_decay),
+                     "--rtol", str(a.rtol), "--seed", str(a.seed)])
     return [
         ("E0", "环境自检 (torch_npu/NPU/CANN/双向 DLPack 冒烟)",
          [os.path.join(EXPERIMENTS, "check_env.py")]),
-        ("E1", "机制验证: 9 STEP / 14 检查项 (零拷贝/桥接/解析解/负对照)",
+        ("E1", "机制验证: 11 STEP / 17 检查项 (零拷贝/桥接/解析解/负对照/GNN C1 C3)",
          [os.path.join(EXPERIMENTS, "verify_dlpack.py"), "--device", a.device,
           "--rtol", str(a.rtol)]),
-        ("E2", "混合训练 dlpack + MS 参照臂 (收敛/泛化/切换等价性/M4, 逐步 CSV)",
-         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + train),
-        ("E3", "混合训练 copy 对照 + MS 参照臂 (唯一变量=交换机制)",
-         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + train
+        ("E2", "GCN 混合训练 dlpack + MS 参照臂 (收敛/切换等价性/C2 双锚, 逐步 CSV)",
+         [os.path.join(EXPERIMENTS, "gcn_hybrid.py")] + gcn),
+        ("E3", "GCN 混合训练 copy 对照 + MS 参照臂 (唯一变量=交换机制)",
+         [os.path.join(EXPERIMENTS, "gcn_hybrid.py")] + gcn
          + ["--exchange", "copy"]),
-        ("E4", "形态对称性: PT前段+MS后段 + MS 参照臂 (迁移过半形态)",
-         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + train
+        ("E4", "GCN 形态对称性: PT前段+MS后段 + MS 参照臂 (迁移过半形态)",
+         [os.path.join(EXPERIMENTS, "gcn_hybrid.py")] + gcn
          + ["--topology", "front_pt"]),
-        ("E5", "纯交换吞吐尺寸扫描 (边界张量 32KB/1MB/4MB)",
-         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + common
-         + ["--hidden", str(a.hidden), "--bench", "--bench-sizes", a.bench_sizes,
-            "--bench-n", str(a.bench_n)]),
-        ("E6a", "真实开源模型 GCN dlpack + MS 参照臂 (C4 用 Accuracy)",
-         [os.path.join(EXPERIMENTS, "gcn_hybrid.py"), "--device", a.device,
-          "--epochs", str(a.gcn_epochs), "--rtol", str(a.rtol),
-          "--seed", str(a.seed)]),
-        ("E6b", "真实开源模型 GCN copy 对照 (唯一变量=交换机制)",
-         [os.path.join(EXPERIMENTS, "gcn_hybrid.py"), "--device", a.device,
-          "--epochs", str(a.gcn_epochs), "--rtol", str(a.rtol),
-          "--seed", str(a.seed), "--exchange", "copy"]),
+        ("E5", "GCN 纯交换吞吐尺寸扫描 (边界张量 173KB/1MB/4MB)",
+         [os.path.join(EXPERIMENTS, "gcn_hybrid.py")]
+         + ["--device", a.device, "--hidden", str(a.hidden), "--bench",
+            "--bench-sizes", a.bench_sizes]),
     ]
 
 
@@ -156,16 +147,14 @@ def main():
     ap = argparse.ArgumentParser(
         description="DLPack 混合过渡态验证: 一键顺序执行 E0~E5 并 tee 日志")
     ap.add_argument("--device", default="npu", choices=["npu", "cpu"])
-    ap.add_argument("--steps", type=int, default=300)
-    ap.add_argument("--hidden", type=int, default=64)
-    ap.add_argument("--batch", type=int, default=128)
-    ap.add_argument("--lr", type=float, default=0.05)
-    ap.add_argument("--rtol", default="5e-3", help="M4 容差 (默认 NPU 口径 5e-3)")
-    ap.add_argument("--eval-every", type=int, default=10)
-    ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--bench-sizes", default="128,4096,16384")
-    ap.add_argument("--bench-n", type=int, default=200)
-    ap.add_argument("--gcn-epochs", type=int, default=200)
+    ap.add_argument("--epochs", type=int, default=200, help="GCN 训练轮数")
+    ap.add_argument("--hidden", type=int, default=16)
+    ap.add_argument("--lr", type=float, default=0.01)
+    ap.add_argument("--weight-decay", type=float, default=5e-4)
+    ap.add_argument("--rtol", default="5e-3", help="C2 双锚容差 (默认 NPU 口径 5e-3)")
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--bench-sizes", default="2708,16384,65536")
+    ap.add_argument("--bench-n", type=int, default=50)
     a = ap.parse_args()
 
     dev = "cpu" if a.device == "cpu" else "npu"
@@ -177,8 +166,8 @@ def main():
 
     print("=" * 78)
     print(f"DLPack 混合过渡态验证 — 一键全跑 ({len(stages)} 个阶段)")
-    print(f"device={a.device}  steps={a.steps}  hidden={a.hidden}  batch={a.batch}  "
-          f"rtol={a.rtol}")
+    print(f"device={a.device}  epochs={a.epochs}  hidden={a.hidden}  lr={a.lr}  "
+          f"wd={a.weight_decay}  rtol={a.rtol}")
     print(f"日志: {log_path}")
     print("=" * 78)
 
@@ -196,7 +185,7 @@ def main():
             tee(f"### cmd: {PY} {cmd[0]} {' '.join(cmd[1:])}\n")
             tee("#" * 78 + "\n")
             sampler = start_smi_sampler(a.device, tag, out_dir) \
-                if tag in ("E2", "E3", "E4", "E6a", "E6b") else None
+                if tag in ("E2", "E3", "E4") else None
             if sampler:
                 tee(f"### [P1] npu-smi 回退检测采样已启动: {sampler[1]}\n")
             t0 = time.perf_counter()

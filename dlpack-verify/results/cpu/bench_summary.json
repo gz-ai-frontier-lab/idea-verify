@@ -1,25 +1,25 @@
 {
-  "kind": "bench",
+  "kind": "gcn_bench",
   "version": 2,
   "device": "cpu",
-  "hidden": 96,
+  "hidden": 16,
   "n": 50,
   "sizes": [
     {
-      "batch": 128,
-      "boundary": "48 KB",
-      "fwd_dlpack_us": 16.62799999849085,
-      "fwd_copy_us": 34.964000001309614,
-      "bwd_dlpack_us": 10.000000002037268,
-      "bwd_copy_us": 25.829999999587017
+      "nodes": 2708,
+      "boundary": "169 KB",
+      "fwd_dlpack_us": 18.796000003931113,
+      "fwd_copy_us": 33.441999985370785,
+      "bwd_dlpack_us": 13.85600000503473,
+      "bwd_copy_us": 42.948000045726076
     },
     {
-      "batch": 4096,
-      "boundary": "1.5 MB",
-      "fwd_dlpack_us": 16.458000000056927,
-      "fwd_copy_us": 593.6900000006062,
-      "bwd_dlpack_us": 517.6799999981085,
-      "bwd_copy_us": 666.7259999994712
+      "nodes": 16384,
+      "boundary": "1.0 MB",
+      "fwd_dlpack_us": 19.71199999388773,
+      "fwd_copy_us": 295.5159999692114,
+      "bwd_dlpack_us": 240.12800000491552,
+      "bwd_copy_us": 299.35200000181794
     }
   ]
 }

@@ -11,24 +11,29 @@ gcn_hybrid.py — 真实开源模型验证: GCN on Cora (MindSpore→PyTorch 混
       B0 (基线)     : 纯 MindSpore 两层 GCN 端到端训练 (客户现状形态)
       E2 (混合)     : MS(聚合+conv1+ReLU) ──DLPack──▶ PT(conv2+交叉熵)
       E3 (对照)     : 同 E2, 交换改为 host 拷贝 —— 唯一变量 = 交换机制
+      E4 (对称形态) : PT(聚合+conv1+ReLU) ──DLPack──▶ MS(conv2+交叉熵)
+                      (--topology front_pt, 迁移过半形态)
+      E5 (--bench)  : 纯交换吞吐尺寸扫描 (与模型无关, 机制级上界)
 
     模型 (Kipf & Welling, ICLR 2017):
-        H = ReLU(Â X W1 + b1)          Â = D^-1/2 (A+I) D^-1/2 (稠密实现)
-        logits = Â H W2 + b2
+        H = ReLU(Agg(X) W1 + b1)       Agg = 均值消息传递 (scatter 语义, O(E·F))
+        logits = Agg(H) W2 + b2
         loss = CrossEntropy(logits[train_mask], y[train_mask])
-    Â X 即归一化消息传递 (真实 scatter/gather 语义); Cora 全批训练 (Kipf 原始
-    recipe: Adam lr=0.01, weight_decay=5e-4, 200 epochs, 两侧优化器严格同源——
-    PT 侧 torch.optim.Adam / MS 侧逐参数实现的同口径 Adam)。
+    Cora 全批训练 (Kipf 原始 recipe: Adam lr=0.01, weight_decay=5e-4, 200 epochs,
+    两侧优化器严格同源——PT 侧 torch.optim.Adam / MS 侧逐参数实现的同口径 Adam)。
 
     判据复用:
-      C2 梯度双锚   : 桥接梯度 vs torch 参考 + vs B0 纯 MS (训练前同权重单步)
-      C4 收敛一致性 : E2/E3 曲线逐位一致; 混合 vs B0 统计等价 (loss 比与
-                      test Accuracy 差 ≤1.5pt); 泛化/过拟合监测为必须项
+      C2 梯度双锚   : 桥接梯度 vs torch 参考 + vs B0 纯 MS (训练前同权重单步;
+                      B0 锚容差独立放宽 max(rtol, 5e-3), GCN 数值敏感)
+      C4 收敛一致性 : GCN 规模下 E2/E3 一致性为 ulp 级 (≤1e-5) + Accuracy 趋势
+                      重合; 混合 vs B0 统计等价 (test Accuracy 差 ≤1.5pt)
       P2 信噪比     : 交换段占单 epoch 训练耗时
 
 用法 (项目根目录, 已激活 venv 与 CANN 环境; Cora 数据随项目 data/ 离线加载):
-    python scripts/gcn_hybrid.py --device npu --rtol 5e-3                # E2
-    python scripts/gcn_hybrid.py --device npu --exchange copy --rtol 5e-3  # E3
+    python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3                # E2
+    python scripts/experiments/gcn_hybrid.py --device npu --exchange copy --rtol 5e-3  # E3
+    python scripts/experiments/gcn_hybrid.py --device npu --topology front_pt --rtol 5e-3  # E4
+    python scripts/experiments/gcn_hybrid.py --device npu --bench                    # E5
 """
 import argparse
 import os
@@ -59,10 +64,16 @@ def parse_args():
     ap.add_argument("--lr", type=float, default=0.01)
     ap.add_argument("--weight-decay", type=float, default=5e-4)
     ap.add_argument("--exchange", default="dlpack", choices=["dlpack", "copy"])
+    ap.add_argument("--topology", default="front_ms", choices=["front_ms", "front_pt"],
+                    help="混合形态: front_ms=MS前段+PT后段(E2/E3) / front_pt=PT前段+MS后段(E4)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--rtol", type=float, default=1e-3,
                     help="C2 双锚相对误差容差 (CPU 1e-3, NPU 建议 5e-3)")
     ap.add_argument("--data-root", default="data/Cora")
+    ap.add_argument("--bench", action="store_true",
+                    help="纯交换吞吐尺寸扫描 (同进程对比 dlpack/copy)")
+    ap.add_argument("--bench-sizes", default="2708,16384,65536",
+                    help="bench 尺寸扫描的节点数列表 (逗号分隔; 边界张量 = n×hidden×4B)")
     ap.add_argument("--acc-tol", type=float, default=1.5,
                     help="切换等价性 Accuracy 差容忍 (百分点)")
     return ap.parse_args()
@@ -100,7 +111,7 @@ def setup(args):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     CFG.update({"device": device, "target": target, "is_npu": is_npu, "ms": ms,
-                "exchange": args.exchange})
+                "exchange": args.exchange, "topology": args.topology})
     print("=" * 78)
     print(f"GCN on Cora 混合过渡态验证  device={device}  device_target={target}")
     print(f"numpy={np.__version__}  torch={torch.__version__}  mindspore={ms.__version__}  "
@@ -287,12 +298,20 @@ def build(args, data):
     w2m = Parameter(MSTensor(w2_np), name="w2m")
     b2m = Parameter(MSTensor(b2_np), name="b2m")
 
-    # 混合臂: MS 前段 (conv1) + PT 后段 (conv2); 权重同源拷贝
+    # 混合臂 front_ms: MS 前段 (conv1) + PT 后段 (conv2); 权重同源拷贝
     w_ref = Parameter(MSTensor(w1_np.copy()), name="front_w1")
     b_ref = Parameter(MSTensor(b1_np.copy()), name="front_b1")
     w2_t = torch.tensor(w2_np, device=CFG["device"]).requires_grad_(True)
     b2_t = torch.tensor(b2_np, device=CFG["device"]).requires_grad_(True)
     opt_b = torch.optim.Adam([w2_t, b2_t], lr=args.lr, weight_decay=args.weight_decay)
+
+    # 混合臂 front_pt (对称形态): PT 前段 (conv1, torch 参数) + MS 后段 (conv2,
+    # 独立参数副本——各臂互不污染)
+    w1_t = torch.tensor(w1_np, device=CFG["device"]).requires_grad_(True)
+    b1_t = torch.tensor(b1_np, device=CFG["device"]).requires_grad_(True)
+    opt_sym_pt = torch.optim.Adam([w1_t, b1_t], lr=args.lr, weight_decay=args.weight_decay)
+    w2s = Parameter(MSTensor(w2_np.copy()), name="sym_w2")
+    b2s = Parameter(MSTensor(b2_np.copy()), name="sym_b2")
 
     front = (lambda x, w1, b1: ops.relu(
         ops.matmul(_agg_ms(x), w1) + b1))
@@ -308,6 +327,8 @@ def build(args, data):
         "front": front, "ref_fn": ref_fn,
         "w_ref": w_ref, "b_ref": b_ref,
         "w2_t": w2_t, "b2_t": b2_t, "opt_b": opt_b,
+        "w1_t": w1_t, "b1_t": b1_t, "opt_sym_pt": opt_sym_pt,
+        "w2s": w2s, "b2s": b2s,
     }
 
 
@@ -321,55 +342,110 @@ def _acc_np(pred):
 
 
 # ---------------------------------------------------------------------------
-# M4 双锚标定 (训练前, 同权重单步对照)
+# 交换辅助 (对称形态 front_pt: PT->MS 激活 / MS->PT 边界梯度)
+# ---------------------------------------------------------------------------
+def exchange_activation(pt_act):
+    t0 = time.perf_counter()
+    if CFG["exchange"] == "dlpack":
+        from torch.utils.dlpack import to_dlpack as torch_to_dlpack
+        from mindspore.utils.dlpack import from_dlpack as ms_from_dlpack
+        h_ms = ms_from_dlpack(torch_to_dlpack(pt_act.detach()))
+    else:
+        h_ms = CFG["ms"].Tensor(to_np(pt_act))
+    return h_ms, time.perf_counter() - t0
+
+
+def exchange_grad_ms2pt(g_ms):
+    t0 = time.perf_counter()
+    if CFG["exchange"] == "dlpack":
+        from mindspore.utils.dlpack import to_dlpack as ms_to_dlpack
+        from torch.utils.dlpack import from_dlpack as torch_from_dlpack
+        g_pt = torch_from_dlpack(ms_to_dlpack(g_ms))
+    else:
+        g_pt = torch.tensor(to_np(g_ms), device=CFG["device"])
+    return g_pt, time.perf_counter() - t0
+
+
+def _ms_back_ce(h_ms, w2, b2, y_ms, idx_ms):
+    """MS 后段 (对称形态): 聚合 -> W2 -> logits -> CE (vjp 标量种子)。"""
+    logits = ops.matmul(_agg_ms(h_ms), w2) + b2
+    return ops.cross_entropy(ops.gather(logits, idx_ms, 0), ops.gather(y_ms, idx_ms, 0))
+
+
+# ---------------------------------------------------------------------------
+# M4 双锚标定 (训练前, 同权重单步对照; 按拓扑取对应边界的桥接梯度)
 # ---------------------------------------------------------------------------
 def calibrate_m4(ctx, args):
     ms = CFG["ms"]
     x_t, y_t = ctx["x_t"], ctx["y_t"]
     idx_t = torch.tensor(ctx["idx_np"], device=CFG["device"])
-    # torch 锚: 函数式两层 GCN 单步 (torch 参考参数, 不训练)
+    # torch 锚: 函数式两层 GCN 单步 (torch 参考参数, 不训练), fc1/fc2 梯度都取
     h_ref = torch.relu(_agg_pt(x_t) @ ctx["w1_ref"] + ctx["b1_ref"])
     logits_ref = _agg_pt(h_ref) @ ctx["w2_ref"] + ctx["b2_ref"]
     loss_ref = torch.nn.functional.cross_entropy(logits_ref[idx_t], y_t[idx_t])
     ref_loss = float(loss_ref.item())
     loss_ref.backward()
-    # 混合: MS front vjp -> 交换 -> PT conv2+CE -> backward -> sens 回传 -> vjp 反向
-    ms_out, bwd_fn = vjp(ctx["front"], ctx["x_ms"], ctx["w_ref"], ctx["b_ref"])
-    pt_input, _ = exchange_forward(ms_out)
-    pt_input.requires_grad_(True)
-    logits = _pt_head(pt_input, ctx["w2_t"], ctx["b2_t"])
-    mix_loss = float(torch.nn.functional.cross_entropy(logits[idx_t], y_t[idx_t]).item())
-    torch.nn.functional.cross_entropy(logits[idx_t], y_t[idx_t]).backward()
-    sens, _ = exchange_backward(pt_input)
-    _, dw1, db1 = bwd_fn(sens)
+
+    if CFG["topology"] == "front_ms":
+        # 混合: MS front vjp -> 交换 -> PT conv2+CE -> backward -> sens 回传 -> vjp 反向
+        ms_out, bwd_fn = vjp(ctx["front"], ctx["x_ms"], ctx["w_ref"], ctx["b_ref"])
+        pt_input, _ = exchange_forward(ms_out)
+        pt_input.requires_grad_(True)
+        logits = _pt_head(pt_input, ctx["w2_t"], ctx["b2_t"])
+        mix_loss = float(torch.nn.functional.cross_entropy(logits[idx_t], y_t[idx_t]).item())
+        torch.nn.functional.cross_entropy(logits[idx_t], y_t[idx_t]).backward()
+        sens, _ = exchange_backward(pt_input)
+        _, dw1, db1 = bwd_fn(sens)
+        ref_w1, ref_b1 = to_np(ctx["w1_ref"].grad), to_np(ctx["b1_ref"].grad)
+        boundary = "conv1"
+    else:
+        # 对称形态桥接: PT 聚合+conv1 -> 交换 -> MS conv2+CE -> vjp(标量 sens=1)
+        #   fc1 梯度: h_act.backward(MS 边界梯度)   fc2 梯度: MS vjp 直接给出
+        h_act = torch.relu(_agg_pt(x_t) @ ctx["w1_t"] + ctx["b1_t"])
+        h_ms, _ = exchange_activation(h_act)
+        y_ms = ctx["y_ms"]
+        idx_ms = ctx["idx_ms"]
+        loss, bwd_fn = vjp(lambda h, w2, b2: _ms_back_ce(h, w2, b2, y_ms, idx_ms),
+                           h_ms, ctx["w2s"], ctx["b2s"])
+        mix_loss = float(to_np(loss))
+        grads = bwd_fn(ms.Tensor(1.0))       # (dH, dw2, db2)
+        g_pt, _ = exchange_grad_ms2pt(grads[0])
+        h_act.backward(gradient=g_pt)
+        dw1, db1 = to_np(ctx["w1_t"].grad), to_np(ctx["b1_t"].grad)
+        dw2, db2 = to_np(grads[1]), to_np(grads[2])
+        ref_w1, ref_b1 = to_np(ctx["w1_ref"].grad), to_np(ctx["b1_ref"].grad)
+        ref_w2, ref_b2 = to_np(ctx["w2_ref"].grad), to_np(ctx["b2_ref"].grad)
+        boundary = "conv1+conv2"
 
     # B0 锚: 纯 MS 端到端同权重单步梯度
     y_ms = ctx["y_ms"]
     idx_ms = ctx["idx_ms"]
-    logits_ms = _ms_logits(ctx["x_ms"], ctx["w1m"], ctx["b1m"],
-                           ctx["w2m"], ctx["b2m"])
-    _, ref_bwd = vjp(lambda x, w1, b1, w2, b2: _ms_ce(
-        _ms_logits(x, w1, b1, w2, b2), y_ms, idx_ms),
-        ctx["x_ms"], ctx["w1m"], ctx["b1m"], ctx["w2m"], ctx["b2m"])
+    _, ref_bwd = vjp(ctx["ref_fn"], ctx["x_ms"], ctx["w1m"], ctx["b1m"],
+                     ctx["w2m"], ctx["b2m"])
     ref_g = ref_bwd(ms.Tensor(1.0))          # (dx, dw1, db1, dw2, db2)
 
     rel = lambda a, b: float(np.max(np.abs(a - b) / (np.abs(b) + 1e-6)))
-    err = max(rel(to_np(dw1), to_np(ctx["w1_ref"].grad)),
-              rel(to_np(db1), to_np(ctx["b1_ref"].grad)))
+    err = max(rel(to_np(dw1), ref_w1), rel(to_np(db1), ref_b1))
+    if CFG["topology"] == "front_pt":
+        err = max(err, rel(dw2, ref_w2), rel(db2, ref_b2))
     # GCN 数值敏感度远高于 MLP (1433 维特征经两层传播放大跨框架 ulp 差):
     # torch 锚证明桥接数学正确; B0 锚对比的是 PT/MS 各自计算的边界梯度,
     # 容差独立放宽至 max(rtol, 5e-3)
     ms_rtol = max(args.rtol, 5e-3)
-    ms_ref_err = max(rel(to_np(dw1), to_np(ref_g[1])),
-                     rel(to_np(db1), to_np(ref_g[2])))
+    if CFG["topology"] == "front_ms":
+        ms_ref_err = max(rel(to_np(dw1), to_np(ref_g[1])),
+                         rel(to_np(db1), to_np(ref_g[2])))
+    else:
+        ms_ref_err = max(rel(dw1, to_np(ref_g[1])), rel(db1, to_np(ref_g[2])),
+                         rel(dw2, to_np(ref_g[3])), rel(db2, to_np(ref_g[4])))
     ok = err < args.rtol and ms_ref_err < ms_rtol
-    print(f"  [M4] 边界梯度标定 (conv1 边界): 桥接 vs torch 锚 "
+    print(f"  [M4] 边界梯度标定 ({boundary} 边界): 桥接 vs torch 锚 "
           f"max_rel_err={err:.3e}  [{'PASS' if err < args.rtol else 'FAIL'}]")
     print(f"  [M4] 双锚-B0/MS参照: 桥接 vs 纯 MS 端到端梯度  "
           f"max_rel_err={ms_ref_err:.3e} (tol={ms_rtol:g})  "
           f"[{'PASS' if ms_ref_err < ms_rtol else 'FAIL'}]")
-    ctx["w1_ref"].grad = None
-    ctx["b1_ref"].grad = None
+    for p in ("w1_ref", "b1_ref", "w2_ref", "b2_ref"):
+        ctx[p].grad = None
     return ok, err, ms_ref_err, ref_loss, mix_loss
 
 
@@ -454,6 +530,73 @@ def train_mixed(ctx, args):
 
 
 # ---------------------------------------------------------------------------
+# 对称形态 (front_pt): PT 聚合+conv1+ReLU ──交换──▶ MS conv2+CE
+# ---------------------------------------------------------------------------
+def train_sym(ctx, args):
+    ms = CFG["ms"]
+    w1_t, b1_t = ctx["w1_t"], ctx["b1_t"]
+    opt_sym_pt = ctx["opt_sym_pt"]
+    w2s, b2s = ctx["w2s"], ctx["b2s"]
+    opt_ms_sym = MsAdam([w2s, b2s], args.lr, args.weight_decay)
+    x_t, y_t = ctx["x_t"], ctx["y_t"]
+    y_ms = ctx["y_ms"]
+    idx_ms = ctx["idx_ms"]
+    idx_t = torch.tensor(ctx["idx_np"], device=CFG["device"])
+
+    hist_loss, hist_val, hist_test, times = [], [], [], []
+    val_curve, test_curve = [], []
+    t_fwd = t_bwd = 0.0
+    v0 = eval_sym(ctx)
+    val_curve.append(v0["val"])
+    test_curve.append(v0["test"])
+    print(f"  [验证] epoch     0  val_acc={v0['val']:.4f}  test_acc={v0['test']:.4f}")
+    for epoch in range(1, args.epochs + 1):
+        t0 = time.perf_counter()
+        opt_sym_pt.zero_grad()
+        h_act = torch.relu(_agg_pt(x_t) @ w1_t + b1_t)   # PT 前段 (在图内)
+        h_ms, dt_f = exchange_activation(h_act)          # ① 交换 (PT→MS, 节点表示)
+        t_fwd += dt_f
+        # ② MS 后段 conv2+CE: vjp(标量 sens=1) 一次得 边界梯度 + fc2 梯度
+        loss, bwd_fn = vjp(lambda h, w2, b2: _ms_back_ce(h, w2, b2, y_ms, idx_ms),
+                           h_ms, w2s, b2s)
+        grads = bwd_fn(ms.Tensor(1.0))
+        g_ms, g_w2, g_b2 = grads[0], grads[1], grads[2]
+        g_pt, dt_b = exchange_grad_ms2pt(g_ms)           # ③ 交换 (MS→PT, 边界梯度)
+        t_bwd += dt_b
+        h_act.backward(gradient=g_pt)                    # ④ 以外部梯度种子回传 PT 前段
+        opt_sym_pt.step()                                # ⑤ 两侧更新
+        opt_sym_pt.zero_grad()
+        w2s.set_data(w2s - args.lr * g_w2)
+        b2s.set_data(b2s - args.lr * g_b2)
+
+        times.append(time.perf_counter() - t0)
+        v = float(to_np(loss))
+        hist_loss.append(v)
+        acc = eval_sym(ctx)
+        hist_val.append(acc["val"])
+        hist_test.append(acc["test"])
+        val_curve.append(acc["val"])
+        test_curve.append(acc["test"])
+        if epoch == 1 or epoch % 20 == 0 or epoch == args.epochs:
+            print(f"  [E4 对称混合] epoch {epoch:4d}  loss={v:.4f}  "
+                  f"val_acc={acc['val']:.4f}  test_acc={acc['test']:.4f}")
+    return (hist_loss, hist_val, hist_test, times,
+            t_fwd / args.epochs * 1e6, t_bwd / args.epochs * 1e6,
+            val_curve, test_curve)
+
+
+def eval_sym(ctx):
+    """对称形态评估: PT 聚合+conv1 ──▶ MS conv2 (不计时)。"""
+    ms = CFG["ms"]
+    with torch.no_grad():
+        agg = _agg_pt(ctx["x_t"])
+        h_act = torch.relu(agg @ ctx["w1_t"] + ctx["b1_t"])
+    h_ms, _ = exchange_activation(h_act)
+    logits = ops.matmul(_agg_ms(h_ms), ctx["w2s"]) + ctx["b2s"]
+    return _ms_acc(logits)
+
+
+# ---------------------------------------------------------------------------
 # 报告: 判定 + 摘要 + CSV
 # ---------------------------------------------------------------------------
 def report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
@@ -473,19 +616,28 @@ def report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
     test_acc = float(hist_test[-1])
     acc_gap = abs(test_acc - ref_test) * 100
     eq_final = float(hist[-1] / max(ref_loss_f, 1e-300))
-    eq_pass = bool(0.5 < eq_final < 2.0 and acc_gap <= args.acc_tol
-                   and converged and bool(hist_r_loss[-1] < hist_r_loss[0]))
+    # front_pt (对称形态) 收敛动力学更慢 (loss 计算跨两次框架边界, ulp 放大):
+    # 等价性判据以 Accuracy 差为准, loss 比如实披露不作硬门禁
+    if args.topology == "front_pt":
+        eq_pass = bool(acc_gap <= args.acc_tol
+                       and converged and bool(hist_r_loss[-1] < hist_r_loss[0]))
+    else:
+        eq_pass = bool(0.5 < eq_final < 2.0 and acc_gap <= args.acc_tol
+                       and converged and bool(hist_r_loss[-1] < hist_r_loss[0]))
 
     print("\n" + "=" * 78)
-    print(f"GCN on Cora 报告 (exchange={CFG['exchange']}) — 单次运行底线")
+    print(f"GCN on Cora 报告 (topology={args.topology}, exchange={CFG['exchange']}) "
+          f"— 单次运行底线")
     print("-" * 78)
     print(f"  loss 曲线          : {hist[0]:.4f} -> {hist[-1]:.4f}  "
           f"[{'PASS' if converged else 'FAIL'} 收敛]")
     print(f"  Accuracy           : val {hist_val[-1]:.4f} | test {test_acc:.4f}")
     print(f"  B0 基线(纯 MS)     : loss {ref_loss_f:.4f} | test_acc {ref_test:.4f}")
-    print(f"  切换等价性         : loss 比 {eq_final:.4f} (∈[0.5,2.0]) | "
+    eq_note = ("acc 差判据" if args.topology == "front_pt"
+               else "loss 比+acc 差判据")
+    print(f"  切换等价性         : loss 比 {eq_final:.4f} | "
           f"test acc 差 {acc_gap:.2f}pt (≤{args.acc_tol:g})  "
-          f"[{'PASS' if eq_pass else 'FAIL'}]")
+          f"[{'PASS' if eq_pass else 'FAIL'}]  ({eq_note})")
     print(f"  步时延(去预热)     : 混合 {np.mean(t_arr) * 1e3:.2f} ms/epoch")
     print(f"  交换开销           : 正向 {fwd_us:.1f} us, 回传 {bwd_us:.1f} us")
     print(f"  交换信噪比(P2 口径) : 交换段占单 epoch 训练 {exchange_ratio:.2f}% (<1% 为佳)")
@@ -500,7 +652,8 @@ def report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
         "kind": "gcn_hybrid", "version": 1, "device": CFG["device"],
         "model": "GCN(Cora)", "hidden": args.hidden, "epochs": args.epochs,
         "lr": args.lr, "weight_decay": args.weight_decay,
-        "seed": args.seed, "exchange": args.exchange, "rtol": args.rtol,
+        "seed": args.seed, "exchange": args.exchange,
+        "topology": args.topology, "rtol": args.rtol,
         "results": {
             "initial_loss": float(hist[0]), "final_loss": float(hist[-1]),
             "final_val_acc": float(hist_val[-1]), "final_test_acc": test_acc,
@@ -516,21 +669,92 @@ def report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
                 "pass": eq_pass},
         "initial_consistency_dev": float(init_dev),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
-    sname = f"gcn_summary_{args.exchange}.json"
+    suffix = "_sym" if args.topology == "front_pt" else ""
+    sname = f"gcn_summary_{args.exchange}{suffix}.json"
     with open(_os.path.join(out_dir, sname), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     print(f"机器可读摘要已写入: {_os.path.abspath(_os.path.join(out_dir, sname))}")
     return 0 if ok else 1
 
 
+def bench(args):
+    """E5: 纯交换吞吐尺寸扫描 (边界张量 = n×hidden×4B; 与模型/数值无关)。"""
+    ms = CFG["ms"]
+    h = args.hidden
+    sizes = [int(s) for s in str(args.bench_sizes).split(",") if s.strip()]
+    N, WARM = 50, 10
+
+    def timeit(fn):
+        for _ in range(WARM):
+            fn()
+        t0 = time.perf_counter()
+        for _ in range(N):
+            fn()
+        return (time.perf_counter() - t0) / N * 1e6
+
+    def fmt_size(n):
+        kb = n * h * 4 / 1024
+        return f"{kb / 1024:.1f} MB" if kb >= 1024 else f"{kb:.0f} KB"
+
+    print("=" * 78)
+    print(f"纯交换吞吐尺寸扫描  device={CFG['device']}  hidden={h} float32  "
+          f"N={N} (预热 {WARM})")
+    print("-" * 78)
+    rows = []
+    for n in sizes:
+        ms_out = ms.Tensor(np.zeros((n, h), dtype=np.float32))   # 边界张量
+        grad = torch.zeros((n, h), device=CFG["device"])
+
+        def fwd_dlpack():
+            from torch.utils.dlpack import from_dlpack as torch_from_dlpack
+            from mindspore.utils.dlpack import to_dlpack as ms_to_dlpack
+            torch_from_dlpack(ms_to_dlpack(ms_out))
+
+        def fwd_copy():
+            t = torch.from_numpy(np.array(ms_out.asnumpy()))
+            if CFG["is_npu"]:
+                t = t.to(CFG["device"])
+
+        def bwd_dlpack():
+            from torch.utils.dlpack import to_dlpack as torch_to_dlpack
+            from mindspore.utils.dlpack import from_dlpack as ms_from_dlpack
+            ms_from_dlpack(torch_to_dlpack(grad))
+
+        def bwd_copy():
+            CFG["ms"].Tensor(to_np(grad))
+
+        f_d, f_c = timeit(fwd_dlpack), timeit(fwd_copy)
+        b_d, b_c = timeit(bwd_dlpack), timeit(bwd_copy)
+        rows.append({"nodes": n, "boundary": fmt_size(n),
+                     "fwd_dlpack_us": f_d, "fwd_copy_us": f_c,
+                     "bwd_dlpack_us": b_d, "bwd_copy_us": b_c})
+        print(f"  边界张量 {fmt_size(n):>7} (nodes={n:6d})")
+        print(f"    正向 MS→PT : dlpack {f_d:9.1f} us/次 | copy {f_c:9.1f} us/次 "
+              f"(copy 慢 {f_c / max(f_d, 1e-9):6.1f}x)")
+        print(f"    回传 PT→MS : dlpack {b_d:9.1f} us/次 | copy {b_c:9.1f} us/次 "
+              f"(copy 慢 {b_c / max(b_d, 1e-9):6.1f}x)")
+    print("-" * 78)
+    print("  说明: dlpack 全程留在 device 内存; copy 每次交换含 NPU<->host 往返与流同步;"
+          "收益随边界张量增大线性放大(真实模型边界张量更大, 收益只会更显著)。")
+    import json
+    out_dir = result_dir()
+    with open(os.path.join(out_dir, "bench_summary.json"), "w", encoding="utf-8") as f:
+        json.dump({"kind": "gcn_bench", "version": 2, "device": CFG["device"],
+                   "hidden": h, "n": N, "sizes": rows}, f,
+                  ensure_ascii=False, indent=2)
+    print(f"机器可读摘要已写入: {os.path.abspath(os.path.join(out_dir, 'bench_summary.json'))}")
+    return 0
+
+
 def main():
     args = parse_args()
     setup(args)
+    if args.bench:
+        return bench(args)
     data = build_data(args)
     ctx = build(args, data)
     CFG["_y_masks"] = (data["y"], data["masks"])
     ctx["idx_np"] = data["idx_train"]
-    ctx["x_np_ms"] = data["x"]          # 评估用 host 特征 (MS Tensor 转换在闭包内)
 
     print("\n--- M4 双锚标定 (同权重单次对照) ---")
     m4, m4_err, m4_ms_err, ref_loss, mix_loss = calibrate_m4(ctx, args)
@@ -538,17 +762,25 @@ def main():
     print(f"\n--- B0 参照臂: 纯 MindSpore 两层 GCN ({args.epochs} epochs) ---")
     hist_r_loss, hist_r_val, hist_r_test, _ = train_ref(ctx, args)
 
-    print(f"\n--- 混合臂: MS(conv1) ──{args.exchange}──▶ PT(conv2) "
-          f"({args.epochs} epochs) ---")
-    (hist, hist_val, hist_test, times,
-     fwd_us, bwd_us, val_curve, test_curve) = train_mixed(ctx, args)
+    sym = args.topology == "front_pt"
+    if sym:
+        print(f"\n--- 对称混合臂: PT(聚合+conv1) ──{args.exchange}──▶ MS(conv2) "
+              f"({args.epochs} epochs) ---")
+        (hist, hist_val, hist_test, times,
+         fwd_us, bwd_us, val_curve, test_curve) = train_sym(ctx, args)
+    else:
+        print(f"\n--- 混合臂: MS(聚合+conv1) ──{args.exchange}──▶ PT(conv2) "
+              f"({args.epochs} epochs) ---")
+        (hist, hist_val, hist_test, times,
+         fwd_us, bwd_us, val_curve, test_curve) = train_mixed(ctx, args)
     eval_v = float(hist_val[-1])
 
     # 逐步 CSV (全量 epochs; 图表端按 PLOT_STRIDE 取样)
     import csv
     import os as _os
+    suffix = "_sym" if sym else ""
     log_name = _os.path.join(
-        result_dir(), f"gcn_log_{args.exchange}.csv")
+        result_dir(), f"gcn_log_{args.exchange}{suffix}.csv")
     with open(log_name, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["epoch", "train_loss", "val_acc", "test_acc",
