@@ -81,11 +81,35 @@ dlpack-verify/
 
 ```bash
 python scripts/experiments/run_all.py
-# 顺序执行 E0 自检 → E1 机制验证 → E2/E3/E4 训练(每次运行同跑 MS 参照臂) → E5 bench;
+# 顺序执行 E0 自检 → E1 机制验证 → E2/E3/E4 训练(每次运行同跑 MS 参照臂) → E5 bench → E6 GCN 真实模型;
 # 实时回显并 tee 到 results/npu/run_all_<时间戳>.log(每阶段有横幅标注做了什么);
 # 任一阶段失败立即停止; 全部通过后自动导出 results_<时间戳>.xlsx 多 sheet 数据工作簿。
 # 本地快速冒烟: python scripts/experiments/run_all.py --device cpu --steps 20 --rtol 1e-3
 ```
+
+以下为分阶段命令(单独重跑某一项时使用; 参数显式写出保证可复现):
+
+#### 3.2.1 真实开源模型验证(GCN on Cora)——重点
+
+E6 是本验证的**重点**:`scripts/experiments/gcn_hybrid.py` 把验证对象从手写图代理升级为真实开源模型——**Kipf & Welling 两层 GCN** + PyG Planetoid **Cora** 数据集(2708 节点/10556边/1433 维特征/7 分类)。切分点 = conv1 之后(边界 = 节点表示,真实 GNN 的典型切分位置); B0(纯 MindSpore 两层 GCN)内置于每次运行,无需单独执行;E6a/E6b 唯一变量 = 交换机制。
+
+GCN 固定参数(Kipf 原始 recipe,与图代理参数相互独立):
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `--epochs` | 200 | Kipf 训练轮数(全批) |
+| `--hidden` | 16 | 隐层宽度(Kipf 设置) |
+| `--lr` | 0.01 | Adam 学习率 |
+| `--weight-decay` | 5e-4 | L2 正则(两侧 Adam 严格同源实现) |
+| `--seed` | 42 | 同初始化/同数据划分 |
+| `--rtol` | 5e-3(NPU) | C2 梯度双锚容差; B0 锚独立放宽至 max(rtol, 5e-3)(GCN 数值敏感,见 §5.2) |
+
+判读要点(GCN 口径):
+
+- 数据随项目 `data/Cora/` **离线加载**,服务器无需联网下载;
+- **C4 收敛一致性**:GCN 规模(1433 维特征两层传播)下逐位一致不可达——一致性口径为**ulp 级 ≤1e-5 + Accuracy 曲线趋势重合**(浮点归约顺序噪声,非交换差异;torch 锚≤2.4e-5 证明桥接无损);混合 vs B0 为统计等价:**test Accuracy 差 ≤1.5pt**;
+- ** Accuracy 基准**:Kipf 论文公开水平 ~81.5%;CPU 冒烟实测:混合 80.3% vs B0 80.3% (acc 差 0.00pt,一致性 ≤5.5e-7);
+- **P2 信噪比**以真实 GNN 单 batch 耗时为分母,在此规模下才有完全意义。
 
 以下为分阶段命令(单独重跑某一项时使用; 参数显式写出保证可复现):
 
@@ -97,6 +121,8 @@ python scripts/experiments/run_all.py
 | **E3** | **混合训练(copy 对照)** | `python scripts/experiments/train_hybrid.py --device npu --exchange copy --rtol 5e-3` | **仅交换方式: dlpack→host 拷贝** | **DLPack 交换机制的直接收益(主对照)** |
 | **E4** | **形态对称性(PT前段+MS后段)** | `python scripts/experiments/train_hybrid.py --device npu --topology front_pt --rtol 5e-3` | **仅混合形态: MS前段→PT前段** | 迁移过半形态机制成立(切分方向不影响) |
 | E5 | 纯交换吞吐(尺寸扫描) | `python scripts/experiments/train_hybrid.py --device npu --bench`(默认 batch 128/4096/16384,`--bench-sizes` 自定) | 仅 bench 模式 + 边界张量尺寸档 | 收益随边界张量放大趋势(机制级上界) |
+| **E6a** | **真实模型 GCN(dlpack)** | `python scripts/experiments/gcn_hybrid.py --device npu --epochs 200 --hidden 16 --lr 0.01 --weight-decay 5e-4 --rtol 5e-3` | 模型升级: 图代理→真实开源 GCN(Cora) | 真实模型上的切换等价性/收敛/梯度双锚 |
+| **E6b** | **真实模型 GCN(copy 对照)** | `python scripts/experiments/gcn_hybrid.py --device npu --exchange copy --rtol 5e-3` | 仅交换方式: dlpack→host 拷贝 | 真实模型上的机制选型证据 |
 
 **对照关系与归因原则(重要)**:
 
@@ -113,7 +139,7 @@ python scripts/experiments/run_all.py
 .venv\Scripts\activate.bat
 python scripts
 eport\make_report.py
-# 产出: charts/ 五张证据图 + docs\验证报告.md (实测数字自动填充)
+# 产出: charts/ 六张证据图 + docs\验证报告.md (实测数字自动填充)
 #       + results\<时间戳>.xlsx (多 sheet 数据工作簿, 避免零散同名文件搞混)
 ```
 
@@ -158,13 +184,25 @@ eport\make_report.py
 | 10 | **图语义聚合对照**:交换边界两侧各做一次 scatter 聚合(unsorted_segment_sum / index_add_),结果一致 ≤1e-5 | GNN C1(必过) |
 | 11 | **稀疏 Embedding 完整性**:交换路径上未访问行梯度恒零、稀疏更新后零变化 | GNN C3 |
 
-## 5. 训练主对照设计与真机结果(train_hybrid.py)
+## 5. 训练验证设计与真机结果
+
+### 5.1 图代理(简单机制验证, train_hybrid.py)
+
+合成任务上的机制级验证——**它只回答"交换/桥接机制本身是否正确"**,不回答真实模型上的效果;模型效果以 §5.2 真实开源模型为准。
 
 设计:每次运行同跑两臂——**MS 参照臂**(纯 MindSpore 端到端 = 唯一基线 B0)与混合臂(`--topology` 选形态)。**模型为固定小图(128 节点、每节点 4 邻居)上的单层消息传递图网络**:聚合 = 均值消息传递 `segment_sum(gather(X,src),dst)/k`(真实包含scatter/gather 前向与梯度散布,与真实 GNN 算子形态一致),教师同构、权重固定(输出按 1/√h 缩放);切分点在聚合之后(边界 = 节点表示),各臂权重值同源拷贝; E2/E3/E4 同种子同初始化同数据同超参;held-out 验证集(独立验证图,512 节点)训练前/每 10 步(`--eval-every`)/训练后各评一次(计时段外,验证曲线落盘逐步 CSV);每次运行内置底线 = 收敛性 + 泛化(过拟合检查)+ 切换等价性(混合 vs 参照:loss 比 ∈[0.5,2.0]、held-out ≤1.01)+ M4 边界梯度标定(训练前同权重单次对照,按拓扑取 fc1/fc2 边界)+初始一致性。
 
-真机结果:待 910B 重跑后由 `make_report.py` 自动填充(报告 §4.4~§4.9:机制选型对照、切换等价性、形态对称性、梯度双锚、性能门禁)。E5 bench 与任务无关,已有真机基准值:基准尺寸(边界张量 32KB)正向 copy 慢 **13.6x**、回传 **9.4x**,1MB/4MB 档重跑后刷新。
+真机结果(§4.4~§4.9,由 `make_report.py` 自动填充):机制选型对照(E2/E3 loss 与 held-out 逐位一致,交换段快 5.4x/4.0x,步时延 copy 慢 1.05x)、切换等价性(loss 比 0.9987/held-out 比 0.9994)、M4 双锚逐位 0.0、形态对称性(E4)全底线通过——全 PASS。E5 bench 与任务无关:基准尺寸正向 copy 慢 **13.2x**、回传 **8.6x**,4MB 档正向 **133x**(收益随边界张量线性放大)。
 
-**真实开源模型验证(GCN on Cora)**:升级到真实开源模型——Kipf & Welling 两层 GCN + PyG Planetoid Cora(2708 节点/10556 边/1433 维/7 分类,数据随项目 `data/` 离线加载),切分点 = conv1 之后(边界 = 节点表示),B0 = 纯 MS 两层 GCN,C4 判据用 **test Accuracy**(GCN 规模下逐位一致不可达,一致性口径为 ulp 级 ≤1e-5 与趋势重合)。命令:`python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3`(E3 加 `--exchange copy`),run_all 已含 E6 阶段。CPU 冒烟已复现 Kipf 公开水平(test_acc 80.3%,B0 80.3%,acc 差 0.00pt,一致性 ulp 级 ≤5.5e-7)。
+### 5.2 真实开源模型 GCN on Cora(重点, gcn_hybrid.py)
+
+**这是本验证的重点**:合成图代理只能证明机制,真实效果以开源模型为准。
+
+模型与数据:Kipf & Welling 两层 GCN + PyG Planetoid **Cora**(2708 节点/10556 边/1433 维特征/7 分类,public split 140/500/1000;数据随项目 `data/` 离线加载,服务器免联网)。切分点 = conv1 之后(边界 = 节点表示,真实 GNN 典型切分位置);B0 = 纯 MindSpore 两层 GCN(内置于每次运行);优化器两侧严格同源(Kipf recipe:Adam lr=0.01、weight_decay=5e-4、200 epochs 全批)。判据:C4 收敛一致性用 **test Accuracy**(GCN 规模下逐位一致不可达,一致性口径 = ulp 级 ≤1e-5 + Accuracy 趋势重合——浮点归约顺序噪声,非交换差异);C2 梯度双锚 B0 锚容差独立放宽至 max(rtol, 5e-3)(1433 维特征两层传播会放大跨框架 ulp 差,torch 锚 ≤2.4e-5 证明桥接无损)。
+
+执行命令(§3.2.1):E6a dlpack / E6b copy,或 run_all 的 E6 阶段;数据集离线加载无需联网。
+
+CPU 冒烟基准(200 epochs):混合 test_acc **80.3%** vs B0 **80.3%**(acc 差 0.00pt,≤1.5pt 判据 PASS)——复现 Kipf 论文公开水平(~81.5%);E2/E3 一致性 ulp 级 ≤5.5e-7。**910B 真机结果:待 run_all E6 重跑后由 `make_report.py` 自动填充(报告 §4.10/图 6)。**
 
 机制级补充:PYNATIVE GradOperation 反向会重执行一次前向(每步 2 次 MS 前向,固有行为)。已实装 `mindspore.vjp` 模式消除冗余前向(注意官方用法是 `vjp(fn, *inputs)`;标量输出可用标量种子 `bwd_fn(ms.Tensor(1.0))` 一次得全部输入梯度)。
 
@@ -195,7 +233,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-npu.txt
 # 3. 每次使用前激活 CANN 运行时 (容易漏!):
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-# 4. 按 §3 实验矩阵执行 (E0→E1→E2→E3→E4→E5), 输出与 results/ 即交付物
+# 4. 按 §3 实验矩阵执行 (E0→E1→E2→E3→E4→E6→E5), 输出与 results/ 即交付物
 ```
 
 ### 6.4 已知风险与无害告警
