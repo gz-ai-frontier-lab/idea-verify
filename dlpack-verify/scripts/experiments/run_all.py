@@ -74,8 +74,8 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
                 logged = False
                 if state["chosen"]:
                     cmd_t, a, h = state["chosen"]
-                    cmd_s = " ".join(cmd_t).replace('"', "'")
-                    f.write(f"{time.time()},'{cmd_s}',{a},{h},1,\n")
+                    cmd_str = " ".join(cmd_t).replace('"', "'")
+                    f.write(f"{time.time()},'{cmd_str}',{a},{h},1,\n")
                     logged = True
                 else:
                     if state["cards"] is None:
@@ -98,7 +98,7 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
                             except Exception as e:  # noqa: BLE001
                                 out = f"{type(e).__name__}: {e}"
                             a, h = parse(out)
-                            tried.append(f"{cmd_s(cmd)} -> aicore={a or '-'}")
+                            tried.append(f"{' '.join(cmd)} -> aicore={a or '-'}")
                             if a != "":
                                 state["chosen"] = (tuple(cmd), a, h)
                                 logged = True
