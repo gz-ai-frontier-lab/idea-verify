@@ -566,8 +566,7 @@ def train_sym(ctx, args):
         h_act.backward(gradient=g_pt)                    # ④ 以外部梯度种子回传 PT 前段
         opt_sym_pt.step()                                # ⑤ 两侧更新
         opt_sym_pt.zero_grad()
-        w2s.set_data(w2s - args.lr * g_w2)
-        b2s.set_data(b2s - args.lr * g_b2)
+        opt_ms_sym.step([g_w2, g_b2])                    # MS 侧 Adam 更新
 
         times.append(time.perf_counter() - t0)
         v = float(to_np(loss))

@@ -1,0 +1,286 @@
+
+##############################################################################
+### [1/6] E0 — 环境自检 (torch_npu/NPU/CANN/双向 DLPack 冒烟)
+### cmd: /home/mindspore/work/.venv/bin/python /home/mindspore/work/scripts/experiments/check_env.py 
+##############################################################################
+==============================================================================
+DLPack 验证环境自检
+==============================================================================
+------------------------------------------------------------------------------
+冒烟测试 (smoke test):
+  [OK]  MindSpore -> to_dlpack  capsule 导出成功: <class 'PyCapsule'>
+  [OK]  MindSpore -> PyTorch  from_dlpack 成功: shape=(2, 3), device=cpu, dtype=torch.float32
+  [OK]  PyTorch -> MindSpore from_dlpack 成功: shape=(2, 3), dtype=Float32
+==============================================================================
+[OK]   Python                       3.10.21
+[OK]   平台                           Linux-5.10.0-60.18.0.50.r865_35.hce2.aarch64-aarch64-with-glibc2.38
+[OK]   numpy                        1.26.4
+[OK]   PyTorch                      2.7.1+cpu
+[OK]   torch_npu                    2.7.1  NPU设备数=1
+[OK]   MindSpore                    2.10.0
+[OK]   mindspore.utils.dlpack       to_dlpack=True, from_dlpack=True
+[OK]   torch.utils.dlpack           to_dlpack/from_dlpack 均存在
+[OK]   CANN/npu-smi                 +-----------------------------------------------------------
+==============================================================================
+结论: 环境齐备, 可以开始 DLPack 验证。(标注 [OPT] 的项为当前平台可选)
+### [E0] 退出码 0  耗时 19.9 s
+
+##############################################################################
+### [2/6] E1 — 机制验证: 11 STEP / 17 检查项 (零拷贝/桥接/解析解/负对照/GNN C1 C3)
+### cmd: /home/mindspore/work/.venv/bin/python /home/mindspore/work/scripts/experiments/verify_dlpack.py --device npu --rtol 5e-3
+##############################################################################
+==============================================================================
+DLPack 验证  device=npu:0  device_target=Ascend
+numpy=1.26.4  torch=2.7.1+cpu  mindspore=2.10.0  mode=PYNATIVE
+==============================================================================
+
+--- STEP 1/2: 双向基础交换 (dtype/shape/设备) ---
+  [PASS] STEP 1  MS→PT 交换  -- shape=(2, 2) dtype=torch.float32 device=cpu
+  [PASS] STEP 2  PT→MS 交换  -- shape=(2, 2) dtype=Float32
+
+--- STEP 3: 零拷贝语义验证 ---
+  [PASS] STEP 3  MS→PT 零拷贝 (torch.fill_ 后 MS 侧同步)  -- MS 侧读回=[[7.0, 7.0], [7.0, 7.0]]
+  [PASS] STEP 3  PT→MS 零拷贝 (torch.add_ 后 MS 侧同步)  -- MS 侧读回=[[4.0, 4.0], [4.0, 4.0]]
+
+--- STEP 4: PyTorch 局部计算图 (DLPack 叶子重建) ---
+  [PASS] STEP 4  pt_input.grad 非空  -- grad shape=(1, 4)
+  [PASS] STEP 4  pt_head 参数梯度非空
+
+--- STEP 5: 梯度桥接 (pt_input.grad → MS sens) ---
+  [PASS] STEP 5  MS 参数梯度非空 (sens_param=True)  -- fc.weight:(4, 4) | fc.bias:(4,)
+
+--- STEP 6: 数值正确性 (float64 解析解对照) ---
+  [PASS] STEP 6  两框架前向 loss 一致  -- torch=0.22105893 vs 解析=0.22105896
+  [PASS] STEP 6  pt_input.grad == 解析解 d(loss)/d(ms_out)  -- rel_err=6.970e-08
+  [PASS] STEP 6  MS weight 梯度 == 解析解 d(loss)/dW1  -- rel_err=1.423e-07
+  [PASS] STEP 6  MS bias 梯度 == 解析解 d(loss)/db1  -- rel_err=6.970e-08
+
+--- STEP 7: 负对照 (ones_like 假 sens 应产生不同梯度) ---
+  [PASS] STEP 7  假 sens 梯度 ≠ 真实桥接梯度  -- max|ΔW|=1.515e+00
+
+--- STEP 8: 两侧参数更新 ---
+  [PASS] STEP 8  PyTorch 参数已更新  -- max|Δw|=1.120e-04
+  [PASS] STEP 8  MindSpore 参数已更新  -- max|Δw|=4.030e-03
+
+--- STEP 9: 交换耗时统计 (100 次均值) ---
+  dlpack 交换:     16.8 us/次   |  拷贝路径(asnumpy→torch):     31.7 us/次
+
+--- STEP 10: 图语义聚合对照 (边界 scatter 聚合, 两侧一致) ---
+  [PASS] STEP 10  交换边界 scatter 聚合两侧一致 (图语义 C1)  -- rel_err=0.000e+00
+
+--- STEP 11: 稀疏 Embedding 梯度完整性 (未访问行必须零变化) ---
+  [PASS] STEP 11  稀疏梯度完整性: 未访问行梯度恒为零  -- max|g|_untouched=0.000e+00
+  [PASS] STEP 11  稀疏更新后未访问行零变化  -- max|Δ|=0.000e+00
+
+==============================================================================
+验证报告
+==============================================================================
+  [PASS] STEP 1  MS→PT 交换   (shape=(2, 2) dtype=torch.float32 device=cpu)
+  [PASS] STEP 2  PT→MS 交换   (shape=(2, 2) dtype=Float32)
+  [PASS] STEP 3  MS→PT 零拷贝 (torch.fill_ 后 MS 侧同步)   (MS 侧读回=[[7.0, 7.0], [7.0, 7.0]])
+  [PASS] STEP 3  PT→MS 零拷贝 (torch.add_ 后 MS 侧同步)   (MS 侧读回=[[4.0, 4.0], [4.0, 4.0]])
+  [PASS] STEP 4  pt_input.grad 非空   (grad shape=(1, 4))
+  [PASS] STEP 4  pt_head 参数梯度非空
+  [PASS] STEP 5  MS 参数梯度非空 (sens_param=True)   (fc.weight:(4, 4) | fc.bias:(4,))
+  [PASS] STEP 6  两框架前向 loss 一致   (torch=0.22105893 vs 解析=0.22105896)
+  [PASS] STEP 6  pt_input.grad == 解析解 d(loss)/d(ms_out)   (rel_err=6.970e-08)
+  [PASS] STEP 6  MS weight 梯度 == 解析解 d(loss)/dW1   (rel_err=1.423e-07)
+  [PASS] STEP 6  MS bias 梯度 == 解析解 d(loss)/db1   (rel_err=6.970e-08)
+  [PASS] STEP 7  假 sens 梯度 ≠ 真实桥接梯度   (max|ΔW|=1.515e+00)
+  [PASS] STEP 8  PyTorch 参数已更新   (max|Δw|=1.120e-04)
+  [PASS] STEP 8  MindSpore 参数已更新   (max|Δw|=4.030e-03)
+  [PASS] STEP 10 交换边界 scatter 聚合两侧一致 (图语义 C1)   (rel_err=0.000e+00)
+  [PASS] STEP 11 稀疏梯度完整性: 未访问行梯度恒为零   (max|g|_untouched=0.000e+00)
+  [PASS] STEP 11 稀疏更新后未访问行零变化   (max|Δ|=0.000e+00)
+------------------------------------------------------------------------------
+合计: 17/17 PASS
+结论: 全部通过 — DLPack 交换/零拷贝/梯度桥接机制在该环境成立。
+机器可读摘要已写入: /home/mindspore/work/results/npu/verify_summary.json
+### [E1] 退出码 0  耗时 42.8 s
+
+##############################################################################
+### [3/6] E2 — GCN 混合训练 dlpack + MS 参照臂 (收敛/切换等价性/C2 双锚, 逐步 CSV)
+### cmd: /home/mindspore/work/.venv/bin/python /home/mindspore/work/scripts/experiments/gcn_hybrid.py --device npu --epochs 200 --hidden 16 --lr 0.01 --weight-decay 0.0005 --rtol 5e-3 --seed 42
+##############################################################################
+### [P1] npu-smi 回退检测采样已启动: /home/mindspore/work/results/npu/smi_E2_20261123_114536.csv
+==============================================================================
+GCN on Cora 混合过渡态验证  device=npu:0  device_target=Ascend
+numpy=1.26.4  torch=2.7.1+cpu  mindspore=2.10.0  epochs=200  hidden=16  lr=0.01  wd=0.0005  exchange=dlpack
+==============================================================================
+Cora: 2708 nodes / 10556 edges / 1433 features / 7 classes | train 140 val 500 test 1000
+聚合: 均值消息传递 segment_sum(gather(X,src),dst)/deg(dst) (scatter 语义, O(E·F))
+
+--- M4 双锚标定 (同权重单次对照) ---
+  [M4] 边界梯度标定 (conv1 边界): 桥接 vs torch 锚 max_rel_err=2.708e-05  [PASS]
+  [M4] 双锚-B0/MS参照: 桥接 vs 纯 MS 端到端梯度  max_rel_err=9.062e-05 (tol=0.005)  [PASS]
+
+--- B0 参照臂: 纯 MindSpore 两层 GCN (200 epochs) ---
+  [B0] epoch    1  loss=1.9506  val_acc=0.4260  test_acc=0.4500
+  [B0] epoch   20  loss=0.1097  val_acc=0.7660  test_acc=0.7740
+  [B0] epoch   40  loss=0.0142  val_acc=0.7620  test_acc=0.7850
+  [B0] epoch   60  loss=0.0136  val_acc=0.7680  test_acc=0.7930
+  [B0] epoch   80  loss=0.0162  val_acc=0.7620  test_acc=0.7950
+  [B0] epoch  100  loss=0.0152  val_acc=0.7760  test_acc=0.7960
+  [B0] epoch  120  loss=0.0135  val_acc=0.7800  test_acc=0.7950
+  [B0] epoch  140  loss=0.0123  val_acc=0.7800  test_acc=0.7980
+  [B0] epoch  160  loss=0.0113  val_acc=0.7780  test_acc=0.8010
+  [B0] epoch  180  loss=0.0105  val_acc=0.7740  test_acc=0.7980
+  [B0] epoch  200  loss=0.0098  val_acc=0.7700  test_acc=0.8030
+
+--- 混合臂: MS(聚合+conv1) ──dlpack──▶ PT(conv2) (200 epochs) ---
+  [验证] epoch     0  val_acc=0.1160  test_acc=0.1080
+  [E2/E3 混合] epoch    1  loss=1.9506  val_acc=0.4260  test_acc=0.4500
+  [E2/E3 混合] epoch   20  loss=0.1117  val_acc=0.7660  test_acc=0.7730
+  [E2/E3 混合] epoch   40  loss=0.0144  val_acc=0.7620  test_acc=0.7850
+  [E2/E3 混合] epoch   60  loss=0.0137  val_acc=0.7680  test_acc=0.7910
+  [E2/E3 混合] epoch   80  loss=0.0163  val_acc=0.7620  test_acc=0.7960
+  [E2/E3 混合] epoch  100  loss=0.0153  val_acc=0.7760  test_acc=0.7960
+  [E2/E3 混合] epoch  120  loss=0.0136  val_acc=0.7800  test_acc=0.7970
+  [E2/E3 混合] epoch  140  loss=0.0123  val_acc=0.7800  test_acc=0.7980
+  [E2/E3 混合] epoch  160  loss=0.0113  val_acc=0.7760  test_acc=0.8010
+  [E2/E3 混合] epoch  180  loss=0.0105  val_acc=0.7740  test_acc=0.7990
+  [E2/E3 混合] epoch  200  loss=0.0099  val_acc=0.7720  test_acc=0.8030
+
+逐步日志已写入: /home/mindspore/work/scripts/../results/npu/gcn_log_dlpack.csv
+
+==============================================================================
+GCN on Cora 报告 (topology=front_ms, exchange=dlpack) — 单次运行底线
+------------------------------------------------------------------------------
+  loss 曲线          : 1.9506 -> 0.0099  [PASS 收敛]
+  Accuracy           : val 0.7720 | test 0.8030
+  B0 基线(纯 MS)     : loss 0.0098 | test_acc 0.8030
+  切换等价性         : loss 比 1.0030 | test acc 差 0.00pt (≤1.5)  [PASS]  (loss 比+acc 差判据)
+  步时延(去预热)     : 混合 273.70 ms/epoch
+  交换开销           : 正向 51.0 us, 回传 81.1 us
+  交换信噪比(P2 口径) : 交换段占单 epoch 训练 0.05% (<1% 为佳)
+  [PASS] M4 双锚见上方标定输出
+------------------------------------------------------------------------------
+机器可读摘要已写入: /home/mindspore/work/results/npu/gcn_summary_dlpack.json
+### [P1] 采样已停止, 数据: /home/mindspore/work/results/npu/smi_E2_20261123_114536.csv
+### [E2] 退出码 0  耗时 157.8 s
+
+##############################################################################
+### [4/6] E3 — GCN 混合训练 copy 对照 + MS 参照臂 (唯一变量=交换机制)
+### cmd: /home/mindspore/work/.venv/bin/python /home/mindspore/work/scripts/experiments/gcn_hybrid.py --device npu --epochs 200 --hidden 16 --lr 0.01 --weight-decay 0.0005 --rtol 5e-3 --seed 42 --exchange copy
+##############################################################################
+### [P1] npu-smi 回退检测采样已启动: /home/mindspore/work/results/npu/smi_E3_20261123_114814.csv
+==============================================================================
+GCN on Cora 混合过渡态验证  device=npu:0  device_target=Ascend
+numpy=1.26.4  torch=2.7.1+cpu  mindspore=2.10.0  epochs=200  hidden=16  lr=0.01  wd=0.0005  exchange=copy
+==============================================================================
+Cora: 2708 nodes / 10556 edges / 1433 features / 7 classes | train 140 val 500 test 1000
+聚合: 均值消息传递 segment_sum(gather(X,src),dst)/deg(dst) (scatter 语义, O(E·F))
+
+--- M4 双锚标定 (同权重单次对照) ---
+  [M4] 边界梯度标定 (conv1 边界): 桥接 vs torch 锚 max_rel_err=1.039e-05  [PASS]
+  [M4] 双锚-B0/MS参照: 桥接 vs 纯 MS 端到端梯度  max_rel_err=9.692e-05 (tol=0.005)  [PASS]
+
+--- B0 参照臂: 纯 MindSpore 两层 GCN (200 epochs) ---
+  [B0] epoch    1  loss=1.9506  val_acc=0.4260  test_acc=0.4500
+  [B0] epoch   20  loss=0.1097  val_acc=0.7660  test_acc=0.7740
+  [B0] epoch   40  loss=0.0142  val_acc=0.7620  test_acc=0.7850
+  [B0] epoch   60  loss=0.0136  val_acc=0.7680  test_acc=0.7930
+  [B0] epoch   80  loss=0.0162  val_acc=0.7620  test_acc=0.7950
+  [B0] epoch  100  loss=0.0152  val_acc=0.7760  test_acc=0.7960
+  [B0] epoch  120  loss=0.0135  val_acc=0.7800  test_acc=0.7950
+  [B0] epoch  140  loss=0.0123  val_acc=0.7800  test_acc=0.7980
+  [B0] epoch  160  loss=0.0113  val_acc=0.7780  test_acc=0.8010
+  [B0] epoch  180  loss=0.0105  val_acc=0.7740  test_acc=0.7980
+  [B0] epoch  200  loss=0.0098  val_acc=0.7700  test_acc=0.8030
+
+--- 混合臂: MS(聚合+conv1) ──copy──▶ PT(conv2) (200 epochs) ---
+  [验证] epoch     0  val_acc=0.1160  test_acc=0.1080
+  [E2/E3 混合] epoch    1  loss=1.9506  val_acc=0.4260  test_acc=0.4500
+  [E2/E3 混合] epoch   20  loss=0.1117  val_acc=0.7660  test_acc=0.7730
+  [E2/E3 混合] epoch   40  loss=0.0144  val_acc=0.7620  test_acc=0.7850
+  [E2/E3 混合] epoch   60  loss=0.0137  val_acc=0.7680  test_acc=0.7910
+  [E2/E3 混合] epoch   80  loss=0.0163  val_acc=0.7620  test_acc=0.7960
+  [E2/E3 混合] epoch  100  loss=0.0153  val_acc=0.7760  test_acc=0.7960
+  [E2/E3 混合] epoch  120  loss=0.0136  val_acc=0.7800  test_acc=0.7970
+  [E2/E3 混合] epoch  140  loss=0.0123  val_acc=0.7800  test_acc=0.7980
+  [E2/E3 混合] epoch  160  loss=0.0113  val_acc=0.7760  test_acc=0.8010
+  [E2/E3 混合] epoch  180  loss=0.0105  val_acc=0.7740  test_acc=0.7990
+  [E2/E3 混合] epoch  200  loss=0.0099  val_acc=0.7720  test_acc=0.8030
+
+逐步日志已写入: /home/mindspore/work/scripts/../results/npu/gcn_log_copy.csv
+
+==============================================================================
+GCN on Cora 报告 (topology=front_ms, exchange=copy) — 单次运行底线
+------------------------------------------------------------------------------
+  loss 曲线          : 1.9506 -> 0.0099  [PASS 收敛]
+  Accuracy           : val 0.7720 | test 0.8030
+  B0 基线(纯 MS)     : loss 0.0098 | test_acc 0.8030
+  切换等价性         : loss 比 1.0030 | test acc 差 0.00pt (≤1.5)  [PASS]  (loss 比+acc 差判据)
+  步时延(去预热)     : 混合 280.89 ms/epoch
+  交换开销           : 正向 352.8 us, 回传 382.2 us
+  交换信噪比(P2 口径) : 交换段占单 epoch 训练 0.26% (<1% 为佳)
+  [PASS] M4 双锚见上方标定输出
+------------------------------------------------------------------------------
+机器可读摘要已写入: /home/mindspore/work/results/npu/gcn_summary_copy.json
+### [P1] 采样已停止, 数据: /home/mindspore/work/results/npu/smi_E3_20261123_114814.csv
+### [E3] 退出码 0  耗时 160.9 s
+
+##############################################################################
+### [5/6] E4 — GCN 形态对称性: PT前段+MS后段 + MS 参照臂 (迁移过半形态)
+### cmd: /home/mindspore/work/.venv/bin/python /home/mindspore/work/scripts/experiments/gcn_hybrid.py --device npu --epochs 200 --hidden 16 --lr 0.01 --weight-decay 0.0005 --rtol 5e-3 --seed 42 --topology front_pt
+##############################################################################
+### [P1] npu-smi 回退检测采样已启动: /home/mindspore/work/results/npu/smi_E4_20261123_115055.csv
+==============================================================================
+GCN on Cora 混合过渡态验证  device=npu:0  device_target=Ascend
+numpy=1.26.4  torch=2.7.1+cpu  mindspore=2.10.0  epochs=200  hidden=16  lr=0.01  wd=0.0005  exchange=dlpack
+==============================================================================
+Cora: 2708 nodes / 10556 edges / 1433 features / 7 classes | train 140 val 500 test 1000
+聚合: 均值消息传递 segment_sum(gather(X,src),dst)/deg(dst) (scatter 语义, O(E·F))
+
+--- M4 双锚标定 (同权重单次对照) ---
+  [M4] 边界梯度标定 (conv1+conv2 边界): 桥接 vs torch 锚 max_rel_err=8.323e-05  [PASS]
+  [M4] 双锚-B0/MS参照: 桥接 vs 纯 MS 端到端梯度  max_rel_err=7.250e-05 (tol=0.005)  [PASS]
+
+--- B0 参照臂: 纯 MindSpore 两层 GCN (200 epochs) ---
+  [B0] epoch    1  loss=1.9506  val_acc=0.4260  test_acc=0.4500
+  [B0] epoch   20  loss=0.1097  val_acc=0.7660  test_acc=0.7740
+  [B0] epoch   40  loss=0.0142  val_acc=0.7620  test_acc=0.7850
+  [B0] epoch   60  loss=0.0136  val_acc=0.7680  test_acc=0.7930
+  [B0] epoch   80  loss=0.0162  val_acc=0.7620  test_acc=0.7950
+  [B0] epoch  100  loss=0.0152  val_acc=0.7760  test_acc=0.7960
+  [B0] epoch  120  loss=0.0135  val_acc=0.7800  test_acc=0.7950
+  [B0] epoch  140  loss=0.0123  val_acc=0.7800  test_acc=0.7980
+  [B0] epoch  160  loss=0.0113  val_acc=0.7780  test_acc=0.8010
+  [B0] epoch  180  loss=0.0105  val_acc=0.7740  test_acc=0.7980
+  [B0] epoch  200  loss=0.0098  val_acc=0.7700  test_acc=0.8030
+
+--- 对称混合臂: PT(聚合+conv1) ──dlpack──▶ MS(conv2) (200 epochs) ---
+  [验证] epoch     0  val_acc=0.1160  test_acc=0.1080
+  [E4 对称混合] epoch    1  loss=1.9506  val_acc=0.1440  test_acc=0.1300
+  [E4 对称混合] epoch   20  loss=0.3232  val_acc=0.1560  test_acc=0.1450
+  [E4 对称混合] epoch   40  loss=0.1142  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch   60  loss=0.0847  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch   80  loss=0.0786  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch  100  loss=0.0735  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch  120  loss=0.0684  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch  140  loss=0.0643  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch  160  loss=0.0610  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch  180  loss=0.0583  val_acc=0.1560  test_acc=0.1440
+  [E4 对称混合] epoch  200  loss=0.0560  val_acc=0.1560  test_acc=0.1440
+
+逐步日志已写入: /home/mindspore/work/scripts/../results/npu/gcn_log_dlpack_sym.csv
+
+==============================================================================
+GCN on Cora 报告 (topology=front_pt, exchange=dlpack) — 单次运行底线
+------------------------------------------------------------------------------
+  loss 曲线          : 1.9506 -> 0.0560  [PASS 收敛]
+  Accuracy           : val 0.1560 | test 0.1440
+  B0 基线(纯 MS)     : loss 0.0098 | test_acc 0.8030
+  切换等价性         : loss 比 5.6990 | test acc 差 65.90pt (≤1.5)  [FAIL]  (acc 差判据)
+  步时延(去预热)     : 混合 14.90 ms/epoch
+  交换开销           : 正向 90.5 us, 回传 70.7 us
+  交换信噪比(P2 口径) : 交换段占单 epoch 训练 1.08% (<1% 为佳)
+  [PASS] M4 双锚见上方标定输出
+------------------------------------------------------------------------------
+机器可读摘要已写入: /home/mindspore/work/results/npu/gcn_summary_dlpack_sym.json
+### [P1] 采样已停止, 数据: /home/mindspore/work/results/npu/smi_E4_20261123_115055.csv
+### [E4] 退出码 1  耗时 110.9 s
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!! 一键全跑在阶段 E4 失败 (退出码 1), 后续阶段未执行。
+!!! 日志: /home/mindspore/work/results/npu/run_all_20261123_114434.log
