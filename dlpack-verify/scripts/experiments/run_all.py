@@ -17,8 +17,9 @@ import threading
 import time
 
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")   # 管道输出统一 utf-8, 防 GBK 乱码
-PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPTS = os.path.join(PROJECT, "scripts")
+PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+EXPERIMENTS = os.path.join(PROJECT, "scripts", "experiments")
+REPORT = os.path.join(PROJECT, "scripts", "report")
 PY = sys.executable
 
 
@@ -95,24 +96,24 @@ def build_stages(a):
                        "--seed", str(a.seed)])
     return [
         ("E0", "环境自检 (torch_npu/NPU/CANN/双向 DLPack 冒烟)",
-         [os.path.join(SCRIPTS, "check_env.py")]),
+         [os.path.join(EXPERIMENTS, "check_env.py")]),
         ("E1", "机制验证: 9 STEP / 14 检查项 (零拷贝/桥接/解析解/负对照)",
-         [os.path.join(SCRIPTS, "verify_dlpack.py"), "--device", a.device,
+         [os.path.join(EXPERIMENTS, "verify_dlpack.py"), "--device", a.device,
           "--rtol", str(a.rtol)]),
         ("E2", "混合训练 dlpack + MS 参照臂 (收敛/泛化/切换等价性/M4, 逐步 CSV)",
-         [os.path.join(SCRIPTS, "train_hybrid.py")] + train),
+         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + train),
         ("E3", "混合训练 copy 对照 + MS 参照臂 (唯一变量=交换机制)",
-         [os.path.join(SCRIPTS, "train_hybrid.py")] + train
+         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + train
          + ["--exchange", "copy"]),
         ("E4", "形态对称性: PT前段+MS后段 + MS 参照臂 (迁移过半形态)",
-         [os.path.join(SCRIPTS, "train_hybrid.py")] + train
+         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + train
          + ["--topology", "front_pt"]),
         ("E5", "纯交换吞吐尺寸扫描 (边界张量 32KB/1MB/4MB)",
-         [os.path.join(SCRIPTS, "train_hybrid.py")] + common
+         [os.path.join(EXPERIMENTS, "train_hybrid.py")] + common
          + ["--hidden", str(a.hidden), "--bench", "--bench-sizes", a.bench_sizes,
             "--bench-n", str(a.bench_n)]),
         ("E6", "真实开源模型 GCN on Cora (PyG; B0/E2/E3, C4 用 Accuracy)",
-         [os.path.join(SCRIPTS, "gcn_hybrid.py"), "--device", a.device,
+         [os.path.join(EXPERIMENTS, "gcn_hybrid.py"), "--device", a.device,
           "--epochs", str(a.gcn_epochs), "--rtol", str(a.rtol),
           "--seed", str(a.seed)]),
     ]
@@ -191,7 +192,7 @@ def main():
             f"{(time.perf_counter() - t_all) / 60:.1f} 分钟\n")
         tee("#" * 78 + "\n")
         try:
-            sys.path.insert(0, SCRIPTS)
+            sys.path.insert(0, REPORT)
             from export_xlsx import export_xlsx
             xlsx = export_xlsx(dev)
             tee(f"### 数据结果工作簿: {xlsx}\n")

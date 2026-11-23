@@ -14,18 +14,23 @@
 
 ```
 dlpack-verify/
-├── scripts/                # 可执行脚本
-│   ├── run_all.py          #   一键全跑 E0~E5 (tee 时间戳日志, 末尾自动导 xlsx)
-│   ├── check_env.py        #   环境自检 (CPU/910B 通用)
-│   ├── verify_dlpack.py    #   E1 机制验证 (11 个 STEP / 17 检查项, 含 GNN C1/C3)
-│   ├── train_hybrid.py     #   MS 参照臂 + E2/E3 主对照 + E4 对称形态 + E5 --bench
-│   ├── export_xlsx.py      #   数据结果整合: 多 sheet Excel 工作簿 (时间戳命名)
-│   └── make_report.py      #   一键报告: 读 results/ 摘要 → 绘 5 图 + 渲染验证报告
+├── scripts/                # 可执行脚本 (按功能分目录)
+│   ├── experiments/        #   实验执行 (910B / 本地跑)
+│   │   ├── run_all.py      #     一键全跑 E0~E6 (tee 时间戳日志, 末尾自动导 xlsx)
+│   │   ├── check_env.py    #     E0 环境自检 (CPU/910B 通用)
+│   │   ├── verify_dlpack.py#     E1 机制验证 (11 个 STEP / 17 检查项, 含 GNN C1/C3)
+│   │   ├── train_hybrid.py #     E2/E3/E4 图代理训练主对照 + E5 --bench
+│   │   └── gcn_hybrid.py   #     E6 真实开源模型 GCN on Cora (B0/E2/E3)
+│   └── report/             #   报告与交付物生成 (Windows)
+│       ├── make_report.py  #     一键报告: 读 results/ 摘要 → 绘 6 图 + 渲染验证报告
+│       ├── export_xlsx.py  #     数据结果整合: 多 sheet Excel 工作簿 (时间戳命名)
+│       └── unwrap_md.py    #     md 段落解包 (make_report 内部依赖)
+├── data/                   # 数据集 (离线加载, 如 Cora)
 ├── docs/                   # 文档
 │   ├── 验证报告.md         #   最终交付报告 (npu 数据齐备时由 make_report.py 生成)
 │   ├── 验证报告_draft.md   #   草稿 (数据不全/cpu 调试时生成, 保护正式报告)
 │   └── 代码解读.md         #   verify_dlpack.py 代码解读 (Mermaid 图)
-├── charts/                 # 报告引用的证据图 ×5 (make_report.py 生成)
+├── charts/                 # 报告引用的证据图 ×6 (make_report.py 生成)
 ├── results/                # 运行产物 (脚本自动落盘, 按设备分目录)
 │   ├── npu/                #   910B: 摘要 JSON + 逐步 CSV + run_all_<时间戳>.log
 │   │                       #        + results_<时间戳>.xlsx (多 sheet 数据工作簿)
@@ -75,23 +80,23 @@ dlpack-verify/
 **一键全跑(推荐, 服务器一条命令出全部结果与日志)**:
 
 ```bash
-python scripts/run_all.py
+python scripts/experiments/run_all.py
 # 顺序执行 E0 自检 → E1 机制验证 → E2/E3/E4 训练(每次运行同跑 MS 参照臂) → E5 bench;
 # 实时回显并 tee 到 results/npu/run_all_<时间戳>.log(每阶段有横幅标注做了什么);
 # 任一阶段失败立即停止; 全部通过后自动导出 results_<时间戳>.xlsx 多 sheet 数据工作簿。
-# 本地快速冒烟: python scripts/run_all.py --device cpu --steps 20 --rtol 1e-3
+# 本地快速冒烟: python scripts/experiments/run_all.py --device cpu --steps 20 --rtol 1e-3
 ```
 
 以下为分阶段命令(单独重跑某一项时使用; 参数显式写出保证可复现):
 
 | 编号 | 实验 | 命令(在项目根目录, 已激活 venv 与 CANN 环境) | 变化量 | 回答的问题 |
 |---|---|---|---|---|
-| E0 | 环境自检 | `python scripts/check_env.py` | — | torch_npu/NPU/CANN 全 OK |
-| E1 | 机制验证(11 STEP / 17 检查项, 含 GNN C1/C3) | `python scripts/verify_dlpack.py --device npu --rtol 5e-3` | — | 零拷贝/桥接数学正确 |
-| **E2** | **混合训练(dlpack)** | `python scripts/train_hybrid.py --device npu --rtol 5e-3` | —(基准) | 混合训练收敛/底线/时延 |
-| **E3** | **混合训练(copy 对照)** | `python scripts/train_hybrid.py --device npu --exchange copy --rtol 5e-3` | **仅交换方式: dlpack→host 拷贝** | **DLPack 交换机制的直接收益(主对照)** |
-| **E4** | **形态对称性(PT前段+MS后段)** | `python scripts/train_hybrid.py --device npu --topology front_pt --rtol 5e-3` | **仅混合形态: MS前段→PT前段** | 迁移过半形态机制成立(切分方向不影响) |
-| E5 | 纯交换吞吐(尺寸扫描) | `python scripts/train_hybrid.py --device npu --bench`(默认 batch 128/4096/16384,`--bench-sizes` 自定) | 仅 bench 模式 + 边界张量尺寸档 | 收益随边界张量放大趋势(机制级上界) |
+| E0 | 环境自检 | `python scripts/experiments/check_env.py` | — | torch_npu/NPU/CANN 全 OK |
+| E1 | 机制验证(11 STEP / 17 检查项, 含 GNN C1/C3) | `python scripts/experiments/verify_dlpack.py --device npu --rtol 5e-3` | — | 零拷贝/桥接数学正确 |
+| **E2** | **混合训练(dlpack)** | `python scripts/experiments/train_hybrid.py --device npu --rtol 5e-3` | —(基准) | 混合训练收敛/底线/时延 |
+| **E3** | **混合训练(copy 对照)** | `python scripts/experiments/train_hybrid.py --device npu --exchange copy --rtol 5e-3` | **仅交换方式: dlpack→host 拷贝** | **DLPack 交换机制的直接收益(主对照)** |
+| **E4** | **形态对称性(PT前段+MS后段)** | `python scripts/experiments/train_hybrid.py --device npu --topology front_pt --rtol 5e-3` | **仅混合形态: MS前段→PT前段** | 迁移过半形态机制成立(切分方向不影响) |
+| E5 | 纯交换吞吐(尺寸扫描) | `python scripts/experiments/train_hybrid.py --device npu --bench`(默认 batch 128/4096/16384,`--bench-sizes` 自定) | 仅 bench 模式 + 边界张量尺寸档 | 收益随边界张量放大趋势(机制级上界) |
 
 **对照关系与归因原则(重要)**:
 
@@ -106,7 +111,8 @@ python scripts/run_all.py
 # 服务器上一条命令跑完全部实验后(run_all 已自动生成 xlsx 工作簿),
 # 把整个 results/ 目录拷回 Windows 项目根目录, 然后在 Windows 上:
 .venv\Scripts\activate.bat
-python scripts\make_report.py
+python scripts
+eport\make_report.py
 # 产出: charts/ 五张证据图 + docs\验证报告.md (实测数字自动填充)
 #       + results\<时间戳>.xlsx (多 sheet 数据工作簿, 避免零散同名文件搞混)
 ```
@@ -158,7 +164,7 @@ python scripts\make_report.py
 
 真机结果:待 910B 重跑后由 `make_report.py` 自动填充(报告 §4.4~§4.9:机制选型对照、切换等价性、形态对称性、梯度双锚、性能门禁)。E5 bench 与任务无关,已有真机基准值:基准尺寸(边界张量 32KB)正向 copy 慢 **13.6x**、回传 **9.4x**,1MB/4MB 档重跑后刷新。
 
-**真实开源模型验证(GCN on Cora)**:升级到真实开源模型——Kipf & Welling 两层 GCN + PyG Planetoid Cora(2708 节点/10556 边/1433 维/7 分类,数据随项目 `data/` 离线加载),切分点 = conv1 之后(边界 = 节点表示),B0 = 纯 MS 两层 GCN,C4 判据用 **test Accuracy**(GCN 规模下逐位一致不可达,一致性口径为 ulp 级 ≤1e-5 与趋势重合)。命令:`python scripts/gcn_hybrid.py --device npu --rtol 5e-3`(E3 加 `--exchange copy`),run_all 已含 E6 阶段。CPU 冒烟已复现 Kipf 公开水平(test_acc 80.3%,B0 80.3%,acc 差 0.00pt,一致性 ulp 级 ≤5.5e-7)。
+**真实开源模型验证(GCN on Cora)**:升级到真实开源模型——Kipf & Welling 两层 GCN + PyG Planetoid Cora(2708 节点/10556 边/1433 维/7 分类,数据随项目 `data/` 离线加载),切分点 = conv1 之后(边界 = 节点表示),B0 = 纯 MS 两层 GCN,C4 判据用 **test Accuracy**(GCN 规模下逐位一致不可达,一致性口径为 ulp 级 ≤1e-5 与趋势重合)。命令:`python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3`(E3 加 `--exchange copy`),run_all 已含 E6 阶段。CPU 冒烟已复现 Kipf 公开水平(test_acc 80.3%,B0 80.3%,acc 差 0.00pt,一致性 ulp 级 ≤5.5e-7)。
 
 机制级补充:PYNATIVE GradOperation 反向会重执行一次前向(每步 2 次 MS 前向,固有行为)。已实装 `mindspore.vjp` 模式消除冗余前向(注意官方用法是 `vjp(fn, *inputs)`;标量输出可用标量种子 `bwd_fn(ms.Tensor(1.0))` 一次得全部输入梯度)。
 
@@ -219,9 +225,9 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ## 8. 交付物与报告生成
 
 ```bash
-# NPU 实验全部跑完后(服务器推荐直接 python scripts/run_all.py 一条命令),
+# NPU 实验全部跑完后(服务器推荐直接 python scripts/experiments/run_all.py 一条命令),
 # results/ 拷回 Windows, 一键生成最终报告:
-python scripts/make_report.py
+python scripts/report/make_report.py
 # 产出: charts/ 五张证据图(实测数据重绘) + docs/验证报告.md(实测数字自动填充)
 #       + results/<时间戳>.xlsx(多 sheet 数据工作簿: 摘要总览/机制验证/各跑曲线/bench)
 # 正式条件: npu 的 verify_summary.json + train_summary_h64_dlpack.json +

@@ -16,8 +16,8 @@ make_report.py — 一键生成最终验证报告 (图表 + 文档)
        否则 docs/验证报告_draft.md (不覆盖正式报告), 控制台列出缺失项与补跑命令。
 
 数据优先级: npu > cpu。
-用法: python scripts/make_report.py
-(实验本身请运行 scripts/train_hybrid.py 与 scripts/verify_dlpack.py)
+用法: python scripts/report/make_report.py
+(实验本身请运行 scripts/experiments/train_hybrid.py 与 scripts/experiments/verify_dlpack.py)
 """
 import csv
 import json
@@ -30,7 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CHARTS_DIR = os.path.join(PROJECT, "charts")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from unwrap_md import unwrap_md   # 报告正文连贯单行 (合并模板中的手工硬换行)
@@ -347,7 +347,7 @@ def gcn_block():
     e2, e3 = GCN["e2"], GCN["e3"]
     if not (e2 and e3):
         return ("⏳ **待复测**:用当前脚本在 910B 重跑 E6 "
-                "(`python scripts/gcn_hybrid.py --device npu --rtol 5e-3`)后本节自动填充。")
+                "(`python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3`)后本节自动填充。")
     fmta = lambda v: f"{v * 100:.1f}%" if isinstance(v, (int, float)) else "⏳"
     lines = ["| 指标 | E2 (dlpack) | E3 (copy) | B0 纯MindSpore 基线 | 判定 |",
              "|---|---|---|---|---|"]
@@ -414,7 +414,7 @@ def fig_symmetry():
     else:
         ax.text(0.5, 0.5,
                 "E4 (对称形态) 待复测:\n"
-                "python scripts/train_hybrid.py --device npu\n"
+                "python scripts/experiments/train_hybrid.py --device npu\n"
                 "--topology front_pt --rtol 5e-3",
                 transform=ax.transAxes, ha="center", va="center",
                 fontsize=10, color="gray")
@@ -509,7 +509,7 @@ def fig_e2e3():
     if rows and not (RUNS[-1].get("e2") and RUNS[-1].get("e3")):
         fig.text(0.01, 0.005,
                  "注: E3 (copy) 摘要待复测 —— "
-                 "python scripts/train_hybrid.py --device npu --exchange copy --rtol 5e-3",
+                 "python scripts/experiments/train_hybrid.py --device npu --exchange copy --rtol 5e-3",
                  fontsize=8, color="gray")
     fig.suptitle("主对照 E2 vs E3 — 交换机制收益 (910B 真机)", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
@@ -843,7 +843,7 @@ def sym_block():
     """§4.6 形态对称性 (E4) markdown 渲染。"""
     if not SYM:
         return ("⏳ **待复测**:对称形态 (PT前段+MS后段) 尚未真机验证——\n\n"
-                "```bash\npython scripts/train_hybrid.py --device npu --topology front_pt "
+                "```bash\npython scripts/experiments/train_hybrid.py --device npu --topology front_pt "
                 "--rtol 5e-3\n```\n\n"
                 "机制与 E2 对称(同为 sens+vjp 反传、双向交换),切分方向不影响交换/桥接机制;"
                 "E4 重跑后本节与图 3 自动填充。")
@@ -1161,10 +1161,10 @@ MS 参照臂(B0)的步时延差为**范式代价披露项**(过渡期训练变�
 
 | 实验 | 命令 | 结果 |
 |---|---|---|
-| 机制验证 | `python scripts/verify_dlpack.py --device npu --rtol 5e-3` | **{{VERIFY_NPASS}}/{{VERIFY_NTOTAL}} PASS** |
-| E2 混合训练 dlpack (h=64) | `python scripts/train_hybrid.py --device npu --rtol 5e-3` | 见 §4.4 |
-| E3 混合训练 copy (h=64) | `python scripts/train_hybrid.py --device npu --exchange copy --rtol 5e-3` | 见 §4.4 |
-| E5 纯交换吞吐(尺寸扫描) | `python scripts/train_hybrid.py --device npu --bench`(边界张量 32KB→4MB) | copy 慢 {{BENCH_RANGE}}(§4.6) |
+| 机制验证 | `python scripts/experiments/verify_dlpack.py --device npu --rtol 5e-3` | **{{VERIFY_NPASS}}/{{VERIFY_NTOTAL}} PASS** |
+| E2 混合训练 dlpack (h=64) | `python scripts/experiments/train_hybrid.py --device npu --rtol 5e-3` | 见 §4.4 |
+| E3 混合训练 copy (h=64) | `python scripts/experiments/train_hybrid.py --device npu --exchange copy --rtol 5e-3` | 见 §4.4 |
+| E5 纯交换吞吐(尺寸扫描) | `python scripts/experiments/train_hybrid.py --device npu --bench`(边界张量 32KB→4MB) | copy 慢 {{BENCH_RANGE}}(§4.6) |
 
 环境自检(`check_env.py`):Python/numpy/PyTorch/torch_npu(NPU 设备数=1)/
 MindSpore/CANN 全部 [OK],双向 DLPack 冒烟测试通过。
@@ -1361,10 +1361,10 @@ sequenceDiagram
 
 | 文件 | 说明 |
 |---|---|
-| `scripts/check_env.py` | 环境自检(含双向 DLPack 冒烟) |
-| `scripts/verify_dlpack.py` | 机制验证脚本(9 STEP,14 检查项) |
-| `scripts/train_hybrid.py` | 混合过渡态验证(MS 参照臂 + E2/E3/E4,`--bench`) |
-| `scripts/make_report.py` | **一键报告生成(本报告即其产物)** |
+| `scripts/experiments/check_env.py` | 环境自检(含双向 DLPack 冒烟) |
+| `scripts/experiments/verify_dlpack.py` | 机制验证脚本(9 STEP,14 检查项) |
+| `scripts/experiments/train_hybrid.py` | 混合过渡态验证(MS 参照臂 + E2/E3/E4,`--bench`) |
+| `scripts/report/make_report.py` | **一键报告生成(本报告即其产物)** |
 | `charts/` | 六张证据图 |
 | `results/{npu,cpu}/` | 机器可读摘要 + 逐步训练日志 |
 | `requirements-*.txt` | 依赖清单 |
@@ -1446,7 +1446,7 @@ def main():
         s = load_summaries(dev)
     if not s["verify"]:
         print("[FATAL] results/ 下没有任何 verify_summary.json, 请先运行 "
-              "scripts/verify_dlpack.py")
+              "scripts/experiments/verify_dlpack.py")
         return 2
     DEV = dev
 
@@ -1466,18 +1466,18 @@ def main():
     missing = []
     if not (s["h64_e2"] and s["h64_e3"]):
         missing.append(("E2/E3 h=64 主对照对",
-                        "python scripts/train_hybrid.py --device npu --rtol 5e-3\n"
-                        "  python scripts/train_hybrid.py --device npu --exchange copy --rtol 5e-3"))
+                        "python scripts/experiments/train_hybrid.py --device npu --rtol 5e-3\n"
+                        "  python scripts/experiments/train_hybrid.py --device npu --exchange copy --rtol 5e-3"))
     if not s["h64_e4"]:
         missing.append(("E4 对称形态 (PT前段+MS后段)",
-                        "python scripts/train_hybrid.py --device npu --topology front_pt --rtol 5e-3"))
+                        "python scripts/experiments/train_hybrid.py --device npu --topology front_pt --rtol 5e-3"))
     vt = (s["verify"] or {}).get("n_total")
     if vt is not None and vt != 17:
         missing.append(("E1 机制验证重跑(新版 17 检查项, 新增 GNN C1/C3)",
-                        "python scripts/verify_dlpack.py --device npu --rtol 5e-3"))
+                        "python scripts/experiments/verify_dlpack.py --device npu --rtol 5e-3"))
     if not s["bench"]:
         missing.append(("E5 纯交换吞吐(尺寸扫描)",
-                        "python scripts/train_hybrid.py --device npu --bench"))
+                        "python scripts/experiments/train_hybrid.py --device npu --bench"))
 
     # ---- 绘图 ----
     charts = [fig_loss_curves(), fig_e2e3(), fig_symmetry(), fig_scorecard(),

@@ -454,8 +454,8 @@ def report():
     else:
         print("结论: 存在失败项, 见上方 FAIL 明细 (失败原因与移植建议见 README)。")
     dev = "npu" if DEVICE.startswith("npu") else "cpu"
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "..", "results", dev)
+    out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "results", dev)
     os.makedirs(out_dir, exist_ok=True)
     summary = {"kind": "verify_dlpack", "device": DEVICE, "env": MEAS.get("env", {}),
                "n_pass": n_pass, "n_total": len(results),

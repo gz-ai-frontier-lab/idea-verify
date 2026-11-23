@@ -22,7 +22,7 @@ import os
 import sys
 import time
 
-PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 TRAIN_FILES = [  # (sheet 名, 摘要文件, 逐步 CSV 文件)
     ("E2_训练曲线", "train_summary_h64_dlpack.json", "training_log_dlpack_h64.csv"),

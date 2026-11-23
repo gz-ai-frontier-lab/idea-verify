@@ -117,7 +117,7 @@ def to_np(t):
 
 def result_dir():
     import os as _os
-    _here = _os.path.dirname(_os.path.abspath(__file__))
+    _here = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     out = _os.path.join(_here, "..", "results", "npu" if CFG["is_npu"] else "cpu")
     _os.makedirs(out, exist_ok=True)
     return out
