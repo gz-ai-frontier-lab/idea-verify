@@ -371,7 +371,7 @@ def gcn_block():
     tb = ((e2 or {}).get("ms_ref") or {}).get("final_test_acc")
     gap = (eq or {}).get("acc_gap_pt")
     lines.append(
-        f"| test Accuracy | {fmta(ta)} | {g3(e3, 'final_test_acc', '{:.4f}')} "
+        f"| test Accuracy | {fmta(ta)} | {g3(e3, 'final_test_acc', '{:.1%}')} "
         f"| {fmta(tb)} | {'✅ 差 ≤1.5pt' if isinstance(gap, (int, float)) and gap <= 1.5 else '⏳'} |")
     lines.append(
         f"| epoch 耗时 (去预热) | {fmt((e2 or {}).get('lat_ms'), '{:.2f} ms')} "
@@ -385,11 +385,14 @@ def gcn_block():
         f"| 切换等价性 (vs B0) | loss 比 {eq.get('final_ratio', 0):.4f} | — "
         f"| — | ✅ test acc 差 {gap_s} ≤1.5pt |"
         if eq else "| 切换等价性 (vs B0) | ⏳ 待复测 | ⏳ 待复测 | ⏳ 待复测 | ⏳ |")
-    m4 = ((e2 or {}).get("m4_calibration") or {})
-    err = m4.get("rel_err")
-    err_s = "0.0(逐位一致)" if err == 0 else fmt(err, "{:.2e}")
+    err = (e2 or {}).get("m4_err")
+    ms_err = (e2 or {}).get("m4_ms_err")
+    err_s = ("0.0(逐位一致)" if err == 0 else
+             (fmt(err, "{:.2e}") if isinstance(err, (int, float)) else "⏳ 待复测"))
+    ms_s = ("0.0(逐位一致)" if ms_err == 0 else
+            (fmt(ms_err, "{:.2e}") if isinstance(ms_err, (int, float)) else "⏳ 待复测"))
     lines.append(f"| C2 梯度双锚 (conv1 边界) | torch 锚 {err_s} | — "
-                 f"| B0 锚 {fmt(m4.get('ms_rel_err'), '{:.2e}')} (GCN 容差放宽 5e-3) |")
+                 f"| B0 锚 {ms_s} (GCN 容差放宽 5e-3) |")
     return "\n".join(lines)
 
 
