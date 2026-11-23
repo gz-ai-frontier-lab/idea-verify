@@ -17,34 +17,34 @@
     "eval_mse_initial": 0.046228308230638504,
     "gen_gap": 1.3721726830087113,
     "val_synced": true,
-    "lat_ms": 3.7692747699717684,
-    "exchange_fwd_us": 287.98465927441913,
-    "exchange_bwd_us": 211.08771363894144,
-    "exchange_ratio_pct": 13.240541042251971,
+    "lat_ms": 4.014875553548336,
+    "exchange_fwd_us": 310.74777245521545,
+    "exchange_bwd_us": 220.8957572778066,
+    "exchange_ratio_pct": 13.241843306031168,
     "converged": true,
     "m4": true
   },
   "ms_ref": {
     "initial_loss": 0.048976898193359375,
-    "final_loss": 0.00403331033885479,
+    "final_loss": 0.004033311735838652,
     "eval_mse": 0.005530398339033127,
     "eval_mse_initial": 0.046228304505348206,
-    "gen_gap": 1.3711809591630426,
+    "gen_gap": 1.3711804842387627,
     "val_synced": true,
-    "lat_ms": 3.07040490830938,
+    "lat_ms": 3.1823300446073213,
     "converged": true
   },
   "eq": {
-    "final_ratio": 0.998694678546408,
+    "final_ratio": 0.9986943326370313,
     "eval_ratio": 0.9994169970125728,
     "pass": true
   },
   "m4_calibration": {
-    "rel_err": 3.145468326692935e-06,
-    "ms_rel_err": 5.751728622271912e-06,
+    "rel_err": 1.7075399227906018e-06,
+    "ms_rel_err": 7.728911441517994e-06,
     "rtol": 0.005,
     "pass": true
   },
   "initial_consistency_dev": 0.0,
-  "generated_at": "2026-11-11T11:59:14"
+  "generated_at": "2026-11-23T08:42:49"
 }

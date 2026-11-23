@@ -137,8 +137,7 @@ GCN 固定参数(Kipf 原始 recipe,与图代理参数相互独立):
 # 服务器上一条命令跑完全部实验后(run_all 已自动生成 xlsx 工作簿),
 # 把整个 results/ 目录拷回 Windows 项目根目录, 然后在 Windows 上:
 .venv\Scripts\activate.bat
-python scripts
-eport\make_report.py
+python scripts\report\make_report.py
 # 产出: charts/ 六张证据图 + docs\验证报告.md (实测数字自动填充)
 #       + results\<时间戳>.xlsx (多 sheet 数据工作簿, 避免零散同名文件搞混)
 ```

@@ -110,6 +110,8 @@ def norm_run(s):
         "final_loss": g("final_loss"),
         "eval_mse": g("eval_mse"),
         "eval_mse_initial": g("eval_mse_initial"),
+        "final_val_acc": g("final_val_acc"),
+        "final_test_acc": g("final_test_acc"),
         "gen_gap": g("gen_gap"),
         "val_synced": r.get("val_synced"),
         "lat_ms": g("lat_ms"),
@@ -122,10 +124,12 @@ def norm_run(s):
         "m4_pass": cal.get("pass"),
         "converged": r.get("converged"),
         "ms_ref": {k: g_ref(k) for k in ("final_loss", "eval_mse",
-                                         "eval_mse_initial", "gen_gap", "lat_ms")}
+                                         "eval_mse_initial", "gen_gap", "lat_ms",
+                                         "final_test_acc")}
         if ref else None,
         "ms_ref_converged": ref.get("converged"),
         "eq": {"final_ratio": ng(eq, "final_ratio"), "eval_ratio": ng(eq, "eval_ratio"),
+               "acc_gap_pt": ng(eq, "acc_gap_pt"),
                "pass": eq.get("pass")} if eq else None,
     }
 
@@ -344,39 +348,44 @@ def load_csv_curve_gcn(path):
 
 def gcn_block():
     """§4.10 真实开源模型 GCN on Cora markdown 渲染。"""
-    e2, e3 = GCN["e2"], GCN["e3"]
-    if not (e2 and e3):
+    e2, e3 = GCN.get("e2"), GCN.get("e3")
+    if not (e2 or e3):
         return ("⏳ **待复测**:用当前脚本在 910B 重跑 E6 "
-                "(`python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3`)后本节自动填充。")
+                "(`python scripts/experiments/run_all.py` 或单独执行 "
+                "`python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3`)后本节自动填充。")
     fmta = lambda v: f"{v * 100:.1f}%" if isinstance(v, (int, float)) else "⏳"
+    e3_na = "⏳ E6b(copy) 待补跑"
     lines = ["| 指标 | E2 (dlpack) | E3 (copy) | B0 纯MindSpore 基线 | 判定 |",
              "|---|---|---|---|---|"]
-    eq = e2.get("eq") or {}
+    eq = (e2 or {}).get("eq") or {}
+    g3 = lambda d, k, pat="{:.4f}": (fmt(d.get(k), pat)
+                                     if isinstance(d, dict) and isinstance(d.get(k), (int, float))
+                                     else e3_na)
     lines.append(
-        f"| final loss | {fmt(e2.get('final_loss'), '{:.4f}')} "
-        f"| {fmt(e3.get('final_loss'), '{:.4f}')} "
+        f"| final loss | {fmt((e2 or {}).get('final_loss'), '{:.4f}')} "
+        f"| {g3(e3, 'final_loss')} "
         f"| {fmt((e2.get('ms_ref') or {}).get('final_loss'), '{:.4f}')} "
-        f"| loss 比 {eq.get('final_ratio', 0):.4f} (∈[0.5,2.0]) |")
-    ta = e2.get("final_test_acc")
-    tb = (e2.get("ms_ref") or {}).get("final_test_acc")
+        f"| loss 比 {eq.get('final_ratio', 0):.4f} (∈[0.5,2.0]) |"
+        if e2 else "| final loss | ⏳ 待复测 | ⏳ 待复测 | ⏳ 待复测 | ⏳ |")
+    ta = (e2 or {}).get("final_test_acc")
+    tb = ((e2 or {}).get("ms_ref") or {}).get("final_test_acc")
     gap = (eq or {}).get("acc_gap_pt")
     lines.append(
-        f"| test Accuracy | {fmta(ta)} | {fmta((e3 or {}).get('final_test_acc'))} "
+        f"| test Accuracy | {fmta(ta)} | {g3(e3, 'final_test_acc', '{:.4f}')} "
         f"| {fmta(tb)} | {'✅ 差 ≤1.5pt' if isinstance(gap, (int, float)) and gap <= 1.5 else '⏳'} |")
     lines.append(
-        f"| epoch 耗时 (去预热) | {fmt(e2.get('lat_ms'), '{:.2f} ms')} "
-        f"| {fmt((e3 or {}).get('lat_ms'), '{:.2f} ms')} | — | — |")
+        f"| epoch 耗时 (去预热) | {fmt((e2 or {}).get('lat_ms'), '{:.2f} ms')} "
+        f"| {g3(e3, 'lat_ms', '{:.2f} ms')} | — | — |")
     lines.append(
-        f"| 交换段 (正向/回传 µs) | {fmt(e2.get('exf_us'), '{:.1f}')} / "
-        f"{fmt(e2.get('exb_us'), '{:.1f}')} "
-        f"| {fmt((e3 or {}).get('exf_us'), '{:.1f}')} / "
-        f"{fmt((e3 or {}).get('exb_us'), '{:.1f}')} | 收益证据 |")
+        f"| 交换段 (正向/回传 µs) | {fmt((e2 or {}).get('exf_us'), '{:.1f}')} / "
+        f"{fmt((e2 or {}).get('exb_us'), '{:.1f}')} "
+        f"| {g3(e3, 'exf_us', '{:.1f}')} / {g3(e3, 'exb_us', '{:.1f}')} | — | 收益证据 |")
     gap_s = (f"{gap:.2f}pt" if isinstance(gap, (int, float)) else "⏳")
     lines.append(
         f"| 切换等价性 (vs B0) | loss 比 {eq.get('final_ratio', 0):.4f} | — "
         f"| — | ✅ test acc 差 {gap_s} ≤1.5pt |"
         if eq else "| 切换等价性 (vs B0) | ⏳ 待复测 | ⏳ 待复测 | ⏳ 待复测 | ⏳ |")
-    m4 = (e2.get("m4_calibration") or {})
+    m4 = ((e2 or {}).get("m4_calibration") or {})
     err = m4.get("rel_err")
     err_s = "0.0(逐位一致)" if err == 0 else fmt(err, "{:.2e}")
     lines.append(f"| C2 梯度双锚 (conv1 边界) | torch 锚 {err_s} | — "

@@ -25,22 +25,33 @@ PY = sys.executable
 
 def start_smi_sampler(dev, tag, out_dir, interval=1.0):
     """P1 回退检测采样 (仅 NPU): 后台采集 npu-smi 的 AI Core/HBM 利用率到 CSV。
-    各版本 npu-smi 的 -t 参数差异较大: 按候选命令自适应探测, 锁定第一个输出含
-    AI Core 数值的命令; 全部失败时把完整帮助文本落盘 raw 列供人工定位。
+
+    npu-smi 各版本的参数与 card 编号差异大 (910B 服务器 card id 常从 40 起,
+    -i 0 会报 Invalid card id), 采样器分两步自适应:
+      1) 跑无参 `npu-smi info` 从表格解析 card id (失败回退 [0, 1, 40, 41]);
+      2) 对每个 card 依次试 `-t usages / -t common / -t board`, 锁定第一个
+         输出含 AI Core 数值的 (card, type) 组合; 全部失败时把完整输出落盘
+         raw 列供人工定位。
     返回 (stop_event, csv_path); cpu 环境返回 None。"""
     if dev != "npu":
         return None
-    candidates = [
-        ["npu-smi", "info", "-t", "usage", "-i", "0"],
-        ["npu-smi", "info", "-t", "usages", "-i", "0"],
-        ["npu-smi", "info", "-t", "common", "-i", "0"],
-        ["npu-smi", "info", "-t", "board", "-i", "0"],
-        ["npu-smi", "info"],
-    ]
     ts = time.strftime("%Y%m%d_%H%M%S")
     path = os.path.join(out_dir, f"smi_{tag}_{ts}.csv")
     stop = threading.Event()
-    state = {"chosen": None}
+    state = {"chosen": None, "cards": None}
+
+    def run(cmd):
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return (r.stdout or "") + (("\n" + r.stderr) if r.stderr else "")
+
+    def discover_cards(text):
+        ids = re.findall(r"^\|\s*(\d+)\s+\S", text, re.M)
+        seen, ordered = set(), []
+        for i in ids:
+            if i not in seen:
+                seen.add(i)
+                ordered.append(i)
+        return ordered or ["0", "1", "40", "41"]
 
     def parse(text):
         aicore = hbm = ""
@@ -48,38 +59,56 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
             low = line.lower()
             if ("aicore" in low or "ai core" in low) and any(c.isdigit() for c in line):
                 digits = re.findall(r"\d+\.?\d*", line)
-                aicore = digits[0] if digits else ""
+                if digits:
+                    aicore = aicore or digits[-1]
             elif "hbm" in low and any(c.isdigit() for c in line):
                 digits = re.findall(r"\d+\.?\d*", line)
-                hbm = digits[0] if digits else ""
+                if digits:
+                    hbm = hbm or digits[-1]
         return aicore, hbm
 
     def loop():
         with open(path, "w", encoding="utf-8") as f:
             f.write("unix_ts,cmd,aicore_pct,hbm_pct,ok,raw\n")
             while not stop.is_set():
-                cmds = [state["chosen"]] if state["chosen"] else candidates
                 logged = False
-                for cmd in cmds:
-                    try:
-                        r = subprocess.run(cmd, capture_output=True, text=True,
-                                           timeout=10)
-                        out = (r.stdout or r.stderr or "").strip()
-                        a, h = parse(out)
-                        cmd_s = " ".join(cmd).replace('"', "'")
-                        if a != "":
-                            state["chosen"] = cmd
-                            f.write(f"{time.time()},'{cmd_s}',{a},{h},1,\n")
-                            logged = True
+                if state["chosen"]:
+                    cmd_t, a, h = state["chosen"]
+                    cmd_s = " ".join(cmd_t).replace('"', "'")
+                    f.write(f"{time.time()},'{cmd_s}',{a},{h},1,\n")
+                    logged = True
+                else:
+                    if state["cards"] is None:
+                        try:
+                            text = run(["npu-smi", "info"])
+                            cards = discover_cards(text)
+                            state["cards"] = cards
+                            f.write(f"{time.time()},'npu-smi info',,,,1,"
+                                    f"\"cards discovered: {','.join(cards)}\"\n")
+                        except Exception as e:  # noqa: BLE001
+                            state["cards"] = ["0", "1", "40", "41"]
+                            f.write(f"{time.time()},,,,0,"
+                                    f"\"card discovery failed: {type(e).__name__}: {e}\"\n")
+                    tried = []
+                    for card in state["cards"]:
+                        for typ in ("usages", "common", "board"):
+                            cmd = ["npu-smi", "info", "-t", typ, "-i", card]
+                            try:
+                                out = run(cmd).strip()
+                            except Exception as e:  # noqa: BLE001
+                                out = f"{type(e).__name__}: {e}"
+                            a, h = parse(out)
+                            tried.append(f"{cmd_s(cmd)} -> aicore={a or '-'}")
+                            if a != "":
+                                state["chosen"] = (tuple(cmd), a, h)
+                                logged = True
+                                break
+                            time.sleep(0.05)
+                        if logged:
                             break
-                        if not logged:
-                            safe = out.replace('"', "'")[:800]
-                            f.write(f"{time.time()},'{cmd_s}',,,0,\"{safe}\"\n")
-                    except Exception as e:  # noqa: BLE001
-                        if not logged:
-                            f.write(f"{time.time()},,,0,\"{type(e).__name__}: {e}\"\n")
-                if not logged:
-                    f.write(f"{time.time()},,,,0,\"no npu-smi candidate worked\"\n")
+                    if not logged:
+                        f.write(f"{time.time()},,,,0,\"tried: "
+                                f"{'; '.join(tried[:6])[:1200]}\"\n")
                 f.flush()
                 stop.wait(interval)
 
@@ -112,10 +141,14 @@ def build_stages(a):
          [os.path.join(EXPERIMENTS, "train_hybrid.py")] + common
          + ["--hidden", str(a.hidden), "--bench", "--bench-sizes", a.bench_sizes,
             "--bench-n", str(a.bench_n)]),
-        ("E6", "真实开源模型 GCN on Cora (PyG; B0/E2/E3, C4 用 Accuracy)",
+        ("E6a", "真实开源模型 GCN dlpack + MS 参照臂 (C4 用 Accuracy)",
          [os.path.join(EXPERIMENTS, "gcn_hybrid.py"), "--device", a.device,
           "--epochs", str(a.gcn_epochs), "--rtol", str(a.rtol),
           "--seed", str(a.seed)]),
+        ("E6b", "真实开源模型 GCN copy 对照 (唯一变量=交换机制)",
+         [os.path.join(EXPERIMENTS, "gcn_hybrid.py"), "--device", a.device,
+          "--epochs", str(a.gcn_epochs), "--rtol", str(a.rtol),
+          "--seed", str(a.seed), "--exchange", "copy"]),
     ]
 
 
@@ -163,7 +196,7 @@ def main():
             tee(f"### cmd: {PY} {cmd[0]} {' '.join(cmd[1:])}\n")
             tee("#" * 78 + "\n")
             sampler = start_smi_sampler(a.device, tag, out_dir) \
-                if tag in ("E2", "E3", "E4", "E6") else None
+                if tag in ("E2", "E3", "E4", "E6a", "E6b") else None
             if sampler:
                 tee(f"### [P1] npu-smi 回退检测采样已启动: {sampler[1]}\n")
             t0 = time.perf_counter()

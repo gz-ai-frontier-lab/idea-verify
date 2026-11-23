@@ -8,26 +8,26 @@
     {
       "batch": 128,
       "boundary": "32 KB",
-      "fwd_dlpack_us": 15.048347413539886,
-      "fwd_copy_us": 199.33633506298065,
-      "bwd_dlpack_us": 14.028176665306091,
-      "bwd_copy_us": 120.91703712940216
+      "fwd_dlpack_us": 12.51518726348877,
+      "fwd_copy_us": 190.65916538238525,
+      "bwd_dlpack_us": 13.41201364994049,
+      "bwd_copy_us": 122.25277721881868
     },
     {
       "batch": 4096,
       "boundary": "1.0 MB",
-      "fwd_dlpack_us": 14.858581125736237,
-      "fwd_copy_us": 716.8834283947945,
-      "bwd_dlpack_us": 114.38943445682526,
-      "bwd_copy_us": 612.0282039046288
+      "fwd_dlpack_us": 12.324526906013489,
+      "fwd_copy_us": 781.6342264413834,
+      "bwd_dlpack_us": 113.79115283489227,
+      "bwd_copy_us": 645.0967118144035
     },
     {
       "batch": 16384,
       "boundary": "4.0 MB",
-      "fwd_dlpack_us": 14.84747976064682,
-      "fwd_copy_us": 1974.7381657361984,
-      "bwd_dlpack_us": 432.74983763694763,
-      "bwd_copy_us": 1936.0287487506866
+      "fwd_dlpack_us": 12.888908386230469,
+      "fwd_copy_us": 2197.953462600708,
+      "bwd_dlpack_us": 433.46840888261795,
+      "bwd_copy_us": 2078.564055263996
     }
   ]
 }
