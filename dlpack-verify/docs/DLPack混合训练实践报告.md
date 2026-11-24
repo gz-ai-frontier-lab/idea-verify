@@ -193,14 +193,89 @@ flowchart TB
 
 ### 4.2 与模型无关的公共部分
 
-换一个模型(包括真实 GNN)，以下基建**原样复用**：
+换一个模型(包括真实 GNN)，以下基建**原样复用**。
 
-1. **交换原语封装**：PT 导出先 `.detach()`；NPU 上 DLPack 只是视图，导出前先 `.clone()` 复制独立副本（否则 MS 侧可能读到被后续计算覆写的数据）并 `torch.npu.synchronize()` 等待写入完成；MS→PT 的 dlpack 输出可能落在 CPU，消费前强制 `.to(device)`——与模型无关，已封装成 `exchange_forward / exchange_backward / exchange_activation / exchange_grad_ms2pt` 四个原语；
-2. **梯度桥接模式**(任意切分点通用)：PT 侧对边界张量 `requires_grad_(True)` 重立叶子 → 局部前向 → `backward(gradient=sens)`；MS 侧 `vjp(fn, *inputs)` + 标量种子 `bwd_fn(ms.Tensor(1.0))` 一次取全部梯度；
-3. **双锚标定方法**：训练前同权重单步，torch 参考 + 纯 MS 端到端两把锚；
-4. **判据体系与记分板呈现**(C1~C4 + P1~P2)；
-5. **一键编排与落盘**：run_all 顺序执行 + 摘要 JSON + 逐步 CSV + 自动核对版报告；
-6. **bench 尺寸扫描方法**：与模型解耦的机制级收益上界。
+**① 交换原语封装**——四个函数与模型无关，`copy` 分支即 E3 的对照路径(节选自 `scripts/experiments/gcn_hybrid.py`，import 与计时细节有删节)：
+
+```python
+def _npu_sync():
+    if CFG["is_npu"]:
+        torch.npu.synchronize()
+
+def exchange_forward(ms_out):
+    """MS -> PT（E2/E3 正向；仅交换段计时）"""
+    t0 = time.perf_counter()
+    if CFG["exchange"] == "dlpack":
+        pt_input = torch_from_dlpack(ms_to_dlpack(ms_out))    # 零拷贝视图
+    else:                    # E3 对照: host 拷贝（NPU->host->NPU 往返）
+        pt_input = torch.from_numpy(np.array(ms_out.asnumpy()))
+        if CFG["is_npu"]:
+            pt_input = pt_input.to(CFG["device"])
+    return pt_input, time.perf_counter() - t0
+
+def exchange_backward(pt_input):
+    """PT 边界梯度 -> MS sens（E2/E3 回传）"""
+    t0 = time.perf_counter()
+    grad = pt_input.grad.detach()        # 带梯度信息的张量必须先 detach 才能导出
+    if CFG["exchange"] == "dlpack":
+        sens = ms_from_dlpack(torch_to_dlpack(grad))          # 零拷贝视图
+    else:
+        sens = ms.Tensor(to_np(grad))
+    return sens, time.perf_counter() - t0
+
+def exchange_activation(pt_act):
+    """PT -> MS 激活值（E4 正向；NPU 上必须先拷贝 + 同步）"""
+    t0 = time.perf_counter()
+    _npu_sync()
+    h_copy = pt_act.detach().clone()     # dlpack 只是视图: 不拷贝, MS 侧会读到
+    h_ms = ms_from_dlpack(torch_to_dlpack(h_copy))            # 被后续计算覆写的数据
+    del h_copy
+    _npu_sync()                          # 等待写入完成再交棒
+    return h_ms, time.perf_counter() - t0
+
+def exchange_grad_ms2pt(g_ms):
+    """MS -> PT 边界梯度（E4 回传）"""
+    t0 = time.perf_counter()
+    _npu_sync()
+    g_copy = ms.Tensor(to_np(g_ms))      # 独立副本
+    # dlpack 输出可能落在 CPU -> 强制搬回 NPU（E4 首跑崩溃的根因）
+    g_pt = torch_from_dlpack(ms_to_dlpack(g_copy)).to(CFG["device"])
+    _npu_sync()
+    return g_pt, time.perf_counter() - t0
+```
+
+**② 梯度桥接模式**——任意切分点通用，每步训练就是一个七拍循环(E2 形态)：
+
+```python
+ms_out, bwd_fn = vjp(front, x_ms, w_ref, b_ref)   # MS 前段: vjp 一次得前向 + 反向函数
+pt_input, _ = exchange_forward(ms_out)            # ① 交换 MS -> PT (零拷贝)
+pt_input.requires_grad_(True)                     # ② 重立叶子, 接入 PT 计算图
+loss = pt_head_and_ce(pt_input, ...)              # ③ PT 局部前向
+loss.backward()                                   # ④ PT 局部反向
+sens, _ = exchange_backward(pt_input)             # ⑤ pt_input.grad 打包回 MS
+_, dw1, db1 = bwd_fn(sens)                        # ⑥ MS 反向 (以 sens 为上游梯度)
+opt_pt.step(); opt_ms.step([dw1, db1])            # ⑦ 两侧参数同一步更新
+```
+
+E4 形态方向镜像，梯度种子改由 MS 侧 vjp 给出：
+
+```python
+h_act = torch.relu(agg_pt(x_t) @ w1_t + b1_t)     # PT 前段 (保持在计算图内)
+h_ms, _ = exchange_activation(h_act)              # ① 交换 PT -> MS
+loss, bwd_fn = vjp(ms_back_ce, h_ms, w2s, b2s)    # ② MS 后段前向 + 局部反向就绪
+grads = bwd_fn(ms.Tensor(1.0))                    # ③ 标量种子一次取 (dH, dW2, db2)
+g_pt, _ = exchange_grad_ms2pt(grads[0])           # ④ 边界梯度 MS -> PT
+h_act.backward(gradient=g_pt)                     # ⑤ 外部梯度种子驱动 PT 反传
+opt_pt.step(); opt_ms.step([grads[1], grads[2]])  # ⑥ 两侧参数同一步更新
+```
+
+**③ 双锚标定方法**：训练前同权重单步，torch 参考 + 纯 MS 端到端两把锚；
+
+**④ 判据体系与记分板呈现**(C1~C4 + P1~P2)；
+
+**⑤ 一键编排与落盘**：run_all 顺序执行 + 摘要 JSON + 逐步 CSV + 数据核对版报告；
+
+**⑥ bench 尺寸扫描方法**：与模型解耦的机制级收益上界。
 
 ### 4.3 机制验证清单(verify_dlpack.py，11 STEP / 17 检查项)
 
