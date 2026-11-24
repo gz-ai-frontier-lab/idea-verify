@@ -13,32 +13,32 @@
   "rtol": 0.005,
   "results": {
     "initial_loss": 1.9506491422653198,
-    "final_loss": 0.009854847565293312,
+    "final_loss": 0.009854846633970737,
     "final_val_acc": 0.772,
     "final_test_acc": 0.803,
-    "lat_ms": 279.20110574923456,
-    "exchange_fwd_us": 352.49553620815277,
-    "exchange_bwd_us": 393.8848525285721,
-    "exchange_ratio_pct": 0.26732716073377194,
+    "lat_ms": 272.3136190325022,
+    "exchange_fwd_us": 375.2438351511955,
+    "exchange_bwd_us": 380.14937192201614,
+    "exchange_ratio_pct": 0.27739824756361203,
     "converged": true,
     "m4": true
   },
   "m4_calibration": {
     "rel_err": 1.0386684152763337e-05,
-    "ms_rel_err": 7.743315654806793e-05,
+    "ms_rel_err": 7.11881002644077e-05,
     "rtol": 0.005,
     "pass": true
   },
   "ms_ref": {
-    "final_loss": 0.009825355373322964,
+    "final_loss": 0.009825515560805798,
     "final_test_acc": 0.803,
     "converged": true
   },
   "eq": {
-    "final_ratio": 1.0030016412485623,
+    "final_ratio": 1.002985194312036,
     "acc_gap_pt": 0.0,
     "pass": true
   },
   "initial_consistency_dev": 1.222252350742668e-07,
-  "generated_at": "2026-11-23T12:25:17"
+  "generated_at": "2026-11-24T01:26:54"
 }

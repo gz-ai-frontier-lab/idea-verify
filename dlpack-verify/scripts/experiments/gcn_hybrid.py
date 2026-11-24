@@ -379,7 +379,7 @@ def exchange_grad_ms2pt(g_ms):
         g_np = to_np(g_ms)                   # MS Tensor → numpy (独立副本)
         g_copy = ms.Tensor(g_np)             # 独立 MS Tensor
         cap = ms_to_dlpack(g_copy)
-        g_pt = torch_from_dlpack(cap)
+        g_pt = torch_from_dlpack(cap).to(CFG["device"])   # dlpack 可能落 CPU → 强制回 NPU
         del g_copy, cap
     else:
         g_pt = torch.tensor(to_np(g_ms), device=CFG["device"])
