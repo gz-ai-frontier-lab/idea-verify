@@ -137,7 +137,7 @@ python scripts\report\make_report.py
 
 `make_report.py` 读取 `results/{npu|cpu}/` 下的 `verify_summary.json`、`gcn_summary_{dlpack|copy|dlpack_sym}.json`、`bench_summary.json` 与逐步训练 CSV,**数据优先级 npu > cpu**(有真机摘要时绝不使用 cpu 数据);缺项时对应图表以"待复测"占位,并在控制台列出补跑命令。
 
-## 5. 判读要点(判据体系:正确性 C1~C4 / 性能 P1~P2,对齐行业咨询口径)
+## 5. 判读要点(判据体系:正确性 C1~C4 / 性能 P1~P2 / 通用性 G1)
 
 **基线**:B0 = MS 参照臂(纯 MindSpore 两层 GCN,每次运行同跑)为**唯一基线**;B1(纯 PyTorch)不做——那是迁移终点的实现工作,不在验证范围。
 
