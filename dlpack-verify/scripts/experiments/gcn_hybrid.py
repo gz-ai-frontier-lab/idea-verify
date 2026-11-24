@@ -27,7 +27,7 @@ gcn_hybrid.py — 真实开源模型验证: GCN on Cora (MindSpore→PyTorch 混
                       B0 锚容差独立放宽 max(rtol, 5e-3), GCN 数值敏感)
       C4 收敛一致性 : GCN 规模下 E2/E3 一致性为 ulp 级 (≤1e-5) + Accuracy 趋势
                       重合; 混合 vs B0 统计等价 (test Accuracy 差 ≤1.5pt)
-      P2 信噪比     : 交换段占单 epoch 训练耗时
+      P1 信噪比     : 交换段占单 epoch 训练耗时
 
 用法 (项目根目录, 已激活 venv 与 CANN 环境; Cora 数据随项目 data/ 离线加载):
     python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3                # E2
@@ -660,7 +660,7 @@ def report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
           f"[{'PASS' if eq_pass else 'FAIL'}]  ({eq_note})")
     print(f"  步时延(去预热)     : 混合 {np.mean(t_arr) * 1e3:.2f} ms/epoch")
     print(f"  交换开销           : 正向 {fwd_us:.1f} us, 回传 {bwd_us:.1f} us")
-    print(f"  交换信噪比(P2 口径) : 交换段占单 epoch 训练 {exchange_ratio:.2f}% (<1% 为佳)")
+    print(f"  交换信噪比(P1 口径) : 交换段占单 epoch 训练 {exchange_ratio:.2f}% (<1% 为佳)")
     print(f"  [{'PASS' if m4 else 'FAIL'}] M4 双锚见上方标定输出")
     print("-" * 78)
     ok = converged and m4 and eq_pass

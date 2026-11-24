@@ -1,6 +1,6 @@
 # DLPack 混合过渡态验证: MindSpore → PyTorch 渐进迁移 (零拷贝交换 + 梯度桥接)
 
-**业务背景**:客户模型当前为 MindSpore,规划迁移至 PyTorch;因迁移人力有限且模型持续演进,选择 DLPack 混合编程作为**迁移过渡态**——未迁移模块留在 MS,已迁移模块改用 PT,边界两侧零拷贝交换 + sens 梯度桥接联合训练。验证对象为**真实开源模型 Kipf & Welling 两层 GCN + PyG Planetoid Cora 数据集**。在 **昇腾 910B(Atlas A2)** 上验证过渡态的"敢切(等价)、选对(机制)、全程适用(对称)",最终由一个脚本生成验证报告。
+**业务背景**:现有 GNN 模型基于 MindSpore,规划渐进迁移至 PyTorch;因迁移周期内模型持续演进、无法一次性重写,选择 DLPack 混合编程作为**迁移过渡态**——未迁移模块留在 MS,已迁移模块改用 PT,边界两侧零拷贝交换 + sens 梯度桥接联合训练。验证对象为**真实开源模型 Kipf & Welling 两层 GCN + PyG Planetoid Cora 数据集**。在 **昇腾 910B(Atlas A2)** 上验证过渡态的"敢切(等价)、选对(机制)、全程适用(对称)",最终由一个脚本生成验证报告。
 
 **工作流(一条主线,NPU 全跑 → 拷回 → Windows 出报告)**:
 
@@ -81,7 +81,7 @@ dlpack-verify/
 首次准备:
 
 ```bash
-# 1. 整目录上传后, 建独立 venv (不动客户已有环境):
+# 1. 整目录上传后, 建独立 venv (不动环境已有包):
 python -m venv .venv && source .venv/bin/activate
 # 2. 安装锁定版本依赖:
 pip install -r requirements-npu.txt
@@ -141,7 +141,7 @@ python scripts\report\make_report.py
 
 `make_report.py` 读取 `results/{npu|cpu}/` 下的 `verify_summary.json`、`gcn_summary_{dlpack|copy|dlpack_sym}.json`、`bench_summary.json` 与逐步训练 CSV,**数据优先级 npu > cpu**(有真机摘要时绝不使用 cpu 数据)。正式条件 = npu 的 verify + E2 + E3 三份摘要齐备;缺项时生成 `docs\验证报告_draft.md`(不覆盖正式报告)并在控制台列出补跑命令。
 
-## 5. 判读要点(判据体系:正确性 C1~C4 / 性能 P1~P3,对齐行业咨询口径)
+## 5. 判读要点(判据体系:正确性 C1~C4 / 性能 P1~P2,对齐行业咨询口径)
 
 **基线**:B0 = MS 参照臂(纯 MindSpore 两层 GCN,每次运行同跑)为**唯一基线**;B1(纯 PyTorch)不做——那是迁移终点的实现工作,不在验证范围。
 
@@ -152,11 +152,12 @@ python scripts\report\make_report.py
 - **C3 稀疏参数完整性**:交换路径上未访问 Embedding 行梯度恒零、稀疏更新后零变化(E1 STEP 11);
 - **C4 收敛曲线一致性(必须项)**:GCN 规模下逐位一致不可达——一致性口径 = **ulp 级 ≤1e-5 + Accuracy 曲线趋势重合**(浮点归约顺序噪声,非交换差异);混合 vs B0 为**统计等价**:loss 比 ∈[0.5,2.0]、test Accuracy 差 ≤1.5pt、曲线形态一致;过拟合检查同步进行;
 
-性能(先卡回退,再谈快慢):
+性能:
 
-- **P1 算子回退检测(存证项,报告中不呈现)**:run_all 在 E2/E3/E4 阶段自动并行采样 npu-smi 落盘 `results/npu/smi_<阶段>_<时间戳>.csv`(1 秒间隔,逐卡采样全部可见 card,原始输出截断存 raw 列);GCN 小图全批训练算子细碎,AI Core 利用率本征接近 0,不作判定;真实 GNN 接入时按需启用"AI Core 长时间近零 + HBM 非预期回落"检测;
-- **P2 交换信噪比**:交换段占单 epoch 训练耗时比例(<1% 为佳);GCN on Cora 为小图全批训练,单 epoch 仅几~几百 ms,占比天然偏高,以真实 GNN 单 batch 口径评估;
-- **P3 epoch 耗时总账**:接入客户真实 GNN 代码后 ≥3 epoch 耗时 ≤B0×1.2 为 PASS;本验证阶段按交换占比摊薄披露。
+- **P1 交换信噪比**:交换段占单 epoch 训练耗时比例(<1% 为佳);GCN on Cora 为小图全批训练,单 epoch 仅几~几百 ms,占比天然偏高,以真实 GNN 单 batch 口径评估;
+- **P2 epoch 耗时总账**:接入真实 GNN 代码后 ≥3 epoch 耗时 ≤B0×1.2 为 PASS;本验证阶段按交换占比摊薄披露;
+
+采样存证(不作为判据,报告中不呈现):run_all 在 E2/E3/E4 阶段自动并行采样 npu-smi 落盘 `results/npu/smi_<阶段>_<时间戳>.csv`(1 秒间隔,逐卡采样全部可见 card,原始输出截断存 raw 列);GCN 小图全批训练算子细碎,AI Core 利用率本征接近 0,不作判定;真实 GNN 接入时按需启用"AI Core 长时间近零 + HBM 非预期回落"检测。
 
 收益证据(非门禁):
 
