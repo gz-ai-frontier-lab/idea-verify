@@ -8,8 +8,8 @@
 
 这个方案成立需要回答三个问题，它们构成整个验证的主线：
 
-1. **敢切吗(切换等价性)**：混合态相对纯 MindSpore 现状，收敛与精度是否一致?不一致，迁移第一天就会否掉方案；
-2. **选对了吗(交换机制)**：边界交换用 DLPack 零拷贝，还是 host 拷贝?收益要量化；
+1. **敢切吗(切换等价性)**：混合态相对纯 MindSpore 现状，收敛与精度是否一致?
+2. **选对了吗(交换机制)**：边界交换用 DLPack 零拷贝，还是 host 拷贝?
 3. **全程适用吗(形态对称性)**：迁移初期"MS 前段 + PT 后段"，迁移过半变成"PT 前段 + MS 后段"——两个方向的桥接机制是否都成立?
 
 ## 2 验证思路：三个问题，三组对照
@@ -51,7 +51,7 @@
 | 选对(交换机制) | ✅ dlpack 优 | 交换段 copy 慢 6.6x/4.4x，训练数值一致 |
 | 全程适用(对称形态 E4) | ✅ PASS | test Accuracy 差 0.00pt，loss 比 1.0000 |
 | P1 交换信噪比 | ✅ | E2 0.05% / E3 0.26%(E4 8.69%，小图口径见 §3.8) |
-| P2 epoch 耗时总账 | ✅ 同量级（初步） | 混合臂 272/273/17 ms vs B0 ≈0.4 s/epoch；正式门禁 ≤B0×1.2 接入时复核 |
+| P2 epoch 耗时总账 | ✅ 同量级 | 混合臂 272/273/17 ms vs B0 ≈0.4 s/epoch；正式门禁 ≤B0×1.2 接入时复核 |
 
 ### 3.2 敢切：混合训练 ≡ 纯 MindSpore
 
@@ -157,7 +157,7 @@ DLPack 全程留在 NPU 显存；copy 每次都要 NPU→host→NPU 往返 + 流
 | E3 copy | 711.5 µs | 273 ms | **0.26%** ✅ |
 | E4 对称 | 1474.0 µs | 17 ms | 8.69%(小图口径，见下) |
 
-E4 偏高的原因清楚：分母只有 17 ms，而它的交换含 clone + 流同步屏障(NPU 上防别名污染的必要成本)。口径以真实 GNN 单 batch 为分母(交换 100µs / 单 batch 100ms = 0.1%)，届时占比会自然落回 1% 以内。
+E4 偏高有两层原因：一是分母小——单 epoch 只有 17 ms；二是它的交换更"重"——DLPack 传递的是同一块显存的视图，为了保证 MS 侧读到完整、不被后续计算覆写的数据，每次交换前要先复制一份独立副本并等待流同步，这份安全成本也计入了交换耗时。P1 的口径以真实 GNN 单 batch 为分母（例如交换 100 µs / 单 batch 100 ms = 0.1%），届时占比会自然落回 1% 以内。
 
 **P2 epoch 耗时总账**：混合臂 272/273 ms（E2/E3）、17 ms（E4，去预热）；B0 纯 MindSpore 约 **0.4 s/epoch**。混合过渡态与纯 MindSpore 的 epoch 开销**同一量级**（front_pt 形态反而低一个数量级），范式代价不构成迁移障碍；正式门禁（真实 GNN ≥3 epoch ≤B0×1.2）在接入真实模型时执行。
 
@@ -168,14 +168,16 @@ E4 偏高的原因清楚：分母只有 17 ms，而它的交换含 clone + 流�
 GCN on Cora 的两层结构是 `H = ReLU(Agg(X)·W1 + b1)`、`logits = Agg(H)·W2 + b2`（Agg = scatter 均值消息传递）。混合改造就是把这条链在 conv1 之后切开，两侧各留一段，边界张量是节点表示 H（2708×16）——**同一个切分点，两个方向都要跑通**：
 
 ```mermaid
-flowchart LR
-    subgraph S1["E2 形态（迁移初期）：MS 前段 + PT 后段"]
-        A1["MindSpore<br/>聚合 + conv1 + ReLU"] ==>"边界张量 H (2708×16)<br/>DLPack 零拷贝交换"==> B1["PyTorch<br/>conv2 + 交叉熵"]
-        B1 -.->|"梯度桥接：pt_input.grad → sens"| A1
+flowchart TB
+    subgraph S1["E2 形态 · 迁移初期：MS 前段 + PT 后段"]
+        direction LR
+        A1["MindSpore<br/>聚合 + conv1 + ReLU"] ==>|"边界张量 H 2708x16<br/>DLPack 零拷贝交换"| B1["PyTorch<br/>conv2 + 交叉熵"]
+        B1 -.->|"梯度桥接<br/>pt_input.grad 转 sens 回传"| A1
     end
-    subgraph S2["E4 形态（迁移过半）：PT 前段 + MS 后段"]
-        A2["PyTorch<br/>聚合 + conv1 + ReLU"] ==>"边界张量 H (2708×16)<br/>DLPack 零拷贝交换"==> B2["MindSpore<br/>conv2 + 交叉熵"]
-        B2 -.->|"梯度桥接：vjp 边界梯度回传"| A2
+    subgraph S2["E4 形态 · 迁移过半：PT 前段 + MS 后段"]
+        direction LR
+        A2["PyTorch<br/>聚合 + conv1 + ReLU"] ==>|"边界张量 H 2708x16<br/>DLPack 零拷贝交换"| B2["MindSpore<br/>conv2 + 交叉熵"]
+        B2 -.->|"梯度桥接<br/>vjp 边界梯度回传"| A2
     end
 ```
 
@@ -193,7 +195,7 @@ flowchart LR
 
 换一个模型(包括真实 GNN)，以下基建**原样复用**：
 
-1. **交换原语封装**：PT 导出先 `.detach()`；NPU 上导出前 `.clone()` 断开与计算缓冲的别名 + `torch.npu.synchronize()` 屏障；MS→PT 的 dlpack 输出可能落在 CPU，消费前强制 `.to(device)`——三个动作与模型无关，已封装成 `exchange_forward / exchange_backward / exchange_activation / exchange_grad_ms2pt` 四个原语；
+1. **交换原语封装**：PT 导出先 `.detach()`；NPU 上 DLPack 只是视图，导出前先 `.clone()` 复制独立副本（否则 MS 侧可能读到被后续计算覆写的数据）并 `torch.npu.synchronize()` 等待写入完成；MS→PT 的 dlpack 输出可能落在 CPU，消费前强制 `.to(device)`——与模型无关，已封装成 `exchange_forward / exchange_backward / exchange_activation / exchange_grad_ms2pt` 四个原语；
 2. **梯度桥接模式**(任意切分点通用)：PT 侧对边界张量 `requires_grad_(True)` 重立叶子 → 局部前向 → `backward(gradient=sens)`；MS 侧 `vjp(fn, *inputs)` + 标量种子 `bwd_fn(ms.Tensor(1.0))` 一次取全部梯度；
 3. **双锚标定方法**：训练前同权重单步，torch 参考 + 纯 MS 端到端两把锚；
 4. **判据体系与记分板呈现**(C1~C4 + P1~P2)；
