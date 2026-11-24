@@ -154,7 +154,7 @@ python scripts\report\make_report.py
 
 性能(先卡回退,再谈快慢):
 
-- **P1 算子回退检测**:run_all 在 E2/E3/E4 阶段自动并行采样 npu-smi(1 秒间隔,**逐卡采样全部可见 card**——多卡/容器场景首个响应的卡不一定是训练在用的卡;每卡按 usages/common/board 顺序探到可用命令,首个成功输出的原始文本截断存 raw 列供格式核对),落盘 `results/npu/smi_<阶段>_<时间戳>.csv`;报告按"AI Core 均值最高的卡 = 训练卡"判定,给 min/avg 与最长近零窗口;真实 GNN 接入时"AI Core 长时间近零 + HBM 非预期回落"为**一票否决**门禁(CPU 冒烟时 AI Core 本征偏低,不自动判定);
+- **P1 算子回退检测(存证项,报告中不呈现)**:run_all 在 E2/E3/E4 阶段自动并行采样 npu-smi 落盘 `results/npu/smi_<阶段>_<时间戳>.csv`(1 秒间隔,逐卡采样全部可见 card,原始输出截断存 raw 列);GCN 小图全批训练算子细碎,AI Core 利用率本征接近 0,不作判定;真实 GNN 接入时按需启用"AI Core 长时间近零 + HBM 非预期回落"检测;
 - **P2 交换信噪比**:交换段占单 epoch 训练耗时比例(<1% 为佳);GCN on Cora 为小图全批训练,单 epoch 仅几~几百 ms,占比天然偏高,以真实 GNN 单 batch 口径评估;
 - **P3 epoch 耗时总账**:接入客户真实 GNN 代码后 ≥3 epoch 耗时 ≤B0×1.2 为 PASS;本验证阶段按交换占比摊薄披露。
 

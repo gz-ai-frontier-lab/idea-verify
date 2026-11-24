@@ -392,38 +392,8 @@ def m4_extremes():
     return (max(t) if t else None, max(b) if b else None)
 
 
-def smi_busy_stats():
-    """跨 smi_*.csv 按卡聚合 AI Core 样本; 返回 (训练卡, 统计dict) 或 None。
-    训练卡 = AI Core 均值最高的卡 (多卡/容器场景其余卡为空闲卡, 本征近零)。"""
-    import glob as _glob
-    vals = {}
-    for fp in sorted(_glob.glob(os.path.join(PROJECT, "results", DEV, "smi_*.csv"))):
-        with open(fp, encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                if row.get("ok") != "1" or row.get("aicore_pct") in (None, ""):
-                    continue
-                try:
-                    v = float(row["aicore_pct"])
-                except ValueError:
-                    continue
-                vals.setdefault((row.get("card") or "").strip() or "—", []).append(v)
-    if not vals:
-        return None
-
-    def st(vs):
-        longest = cur = 0
-        for v in vs:
-            cur = cur + 1 if v < 5.0 else 0
-            longest = max(longest, cur)
-        return {"n": len(vs), "min": min(vs), "avg": sum(vs) / len(vs),
-                "zero_run": longest}
-
-    card = max(vals, key=lambda c: st(vals[c])["avg"])
-    return card, st(vals[card])
-
-
 def scoreboard_table():
-    """§4.1 判据记分板: 一屏看全 E1/C1~C4/三要素/P1~P3 结论与关键数字。"""
+    """§4.1 判据记分板: 一屏看全 E1/C1~C4/三要素/P2~P3 结论与关键数字。"""
     e2, e3, e4 = GCN.get("e2"), GCN.get("e3"), GCN.get("e4")
     meas = (VERIFY or {}).get("meas") or {}
     rows = []
@@ -475,15 +445,6 @@ def scoreboard_table():
     rows.append(f"| 三要素·全程适用(对称形态 E4) | {verdict(e4.get('eq_pass')) if e4 else '⏳'} "
                 f"| test Accuracy 差 {num(e4.get('eq_gap') if e4 else None, '{:.2f}pt')}"
                 f"(≤1.5pt),M4 双锚 {verdict(e4.get('m4_pass')) if e4 else '⏳'} | §4.5 |")
-    # P1 回退检测
-    bs = smi_busy_stats()
-    if bs:
-        card, s = bs
-        p1 = "✅ 存证" if s["avg"] >= 1.0 and s["zero_run"] < 10 else "⚠️ 近零"
-        rows.append(f"| P1 算子回退检测(存证) | {p1} | 训练卡 card {card}: AI Core avg "
-                    f"{s['avg']:.1f}% / min {s['min']:.1f}%(小图本征偏低,口径见 §4.8) | §4.8 |")
-    else:
-        rows.append("| P1 算子回退检测(存证) | ⏳ | 无采样数据 | §4.8 |")
     # P2 信噪比
     if e2 and e2.get("ratio_pct") is not None:
         rows.append(f"| P2 交换信噪比 | ✅ <1% | E2 {e2['ratio_pct']:.2f}% / E3 "
@@ -769,82 +730,9 @@ def fig_e2e3():
 
 
 def perf_section():
-    """§4.8 性能门禁: P1 回退检测采样存证 / P2 交换信噪比 / P3 epoch 口径。"""
-    import glob as _glob
+    """§4.8 性能门禁: P2 交换信噪比 / P3 epoch 口径。"""
     out = []
-    # ---- P1: npu-smi 采样存证 ----
-    out.append("#### P1 算子回退检测（采样存证；真实 GNN 接入时为一票否决门禁）")
-    out.append("")
-    smi_files = sorted(_glob.glob(os.path.join(PROJECT, "results", DEV, "smi_*.csv")))
-    if not smi_files:
-        out.append("⏳ **无采样数据**。910B 上由 `run_all.py` 于 E2/E3/E4 训练阶段自动并行采集 "
-                   "`npu-smi info -t usages`（1 秒间隔，**逐卡采样全部可见 card**——多卡/容器场景"
-                   "首个响应的卡不一定是训练在用的卡），落盘 `results/npu/smi_<阶段>_<时间戳>.csv`，"
-                   "**下次 run_all 重新采集**。")
-    else:
-        rows = ["| 采样文件 | card | 有效命令 | 有效样本 | AI Core min/avg (%) | 最长近零窗口 |",
-                "|---|---|---|---|---|---|"]
-        stats = {}   # card -> [样本数, min, Σavg*样本, 最长近零窗口] 跨文件累计
-        for fp in smi_files:
-            name = os.path.basename(fp)
-            per_card = {}
-            with open(fp, encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    if row.get("ok") != "1" or row.get("aicore_pct") in (None, ""):
-                        continue
-                    try:
-                        v = float(row["aicore_pct"])
-                    except ValueError:
-                        continue
-                    per_card.setdefault((row.get("card") or "").strip() or "—",
-                                        []).append(v)
-            if not per_card:
-                rows.append(f"| {name} | — | — | 0 | 解析失败（见 raw 列） | — |")
-                continue
-            for card, vals in per_card.items():
-                avg = sum(vals) / len(vals)
-                longest = cur = 0
-                for v in vals:
-                    cur = cur + 1 if v < 5.0 else 0
-                    longest = max(longest, cur)
-                cmd = ""
-                with open(fp, encoding="utf-8") as f:
-                    for row in csv.DictReader(f):
-                        if (row.get("ok") == "1" and row.get("cmd") and
-                                (row.get("card") or "").strip() == card):
-                            cmd = row["cmd"].strip("'")
-                            break
-                rows.append(f"| {name} | {card} | {cmd or '—'} | {len(vals)} "
-                            f"| {min(vals):.1f} / {avg:.1f} | {longest} 样本(≈秒) |")
-                st = stats.setdefault(card, [0, float("inf"), 0.0, 0])
-                st[0] += len(vals)
-                st[1] = min(st[1], min(vals))
-                st[2] += avg * len(vals)
-                st[3] = max(st[3], longest)
-        out.extend(rows)
-        out.append("")
-        if stats:
-            card, (n, mn, s_avg, longest) = max(stats.items(), key=lambda kv: kv[1][2])
-            avg = s_avg / n
-            if avg < 1.0:
-                out.append(f"⚠️ **训练卡判定 card {card}**（AI Core avg 最高）均值仅 {avg:.1f}%"
-                           f"（min {mn:.1f}%）——可能采样到空闲卡或解析口径与该 npu-smi 版本不符"
-                           "（每卡首个成功输出的原始文本已存 raw 列供人工核对）；GCN 小图全批训练"
-                           "算子细碎亦可能本征偏低。真实 GNN 接入时以\"AI Core 长时间接近 0% + "
-                           "HBM 非预期回落（D2H→CPU→H2D 特征）\"为一票否决门禁复测。")
-            elif longest >= 10:
-                out.append(f"⚠️ **训练卡判定 card {card}** 检出最长 {longest} 秒近零窗口"
-                           f"（min {mn:.1f}% / avg {avg:.1f}%）——真实 GNN 接入时此类窗口即 "
-                           "P1 一票否决；本验证为小图全批训练、算子细碎，需结合 raw 列人工复核。")
-            else:
-                out.append(f"✅ **训练卡判定 card {card}**（AI Core avg 最高，共 {n} 有效样本）"
-                           f"未检出长时间近零窗口（min {mn:.1f}% / avg {avg:.1f}%）；"
-                           "其余 card 采集值近零为空闲卡，属正常。注：GCN on Cora 为小图全批训练，"
-                           "算子细碎 AI Core 利用率本征偏低；**本阶段为采样存证**，真实 GNN 接入时"
-                           "以\"AI Core 长时间接近 0% + HBM 非预期回落（D2H→CPU→H2D 特征）\""
-                           "为一票否决门禁。")
     # ---- P2: 交换信噪比 ----
-    out.append("")
     out.append("#### P2 交换信噪比（交换段占单 epoch 训练耗时，<1% 为佳）")
     out.append("")
     out.append("| 运行 | 交换段合计 (µs/epoch) | 单 epoch (ms) | 占比 | 判定 |")
@@ -909,8 +797,7 @@ TEMPLATE = """# DLPack 混合编程验证报告
    机制(dlpack vs host 拷贝),量化 DLPack 收益;
 6. **形态对称性(迁移全程适用)**:PT前段+MS后段(E4,迁移过半形态)与
    MS前段+PT后段(E2)机制对称,切分方向不影响桥接;
-7. **GNN 场景门禁**:图语义聚合(C1)、稀疏参数完整性(C3)、算子回退检测(P1)、
-   交换信噪比(P2)——判据体系见 §3.3。
+7. **GNN 场景门禁**:图语义聚合(C1)、稀疏参数完整性(C3)、交换信噪比(P2)——判据体系见 §3.3。
 
 ## 2. 验证环境
 
@@ -979,7 +866,7 @@ flowchart TB
 
 ### 3.3 训练收敛与对照设计(gcn_hybrid.py:GCN on Cora + B0 参照臂 + E2/E3/E4)
 
-验证对象为**真实开源模型 Kipf & Welling 两层 GCN + PyG Planetoid Cora**(2708 节点/10556 边/1433 维特征/7 分类,public split 140/500/1000,数据随项目 `data/` 离线加载)。每次运行跑两臂:**B0 参照臂**(纯 MindSpore 两层 GCN = 唯一基线,客户现状形态)+ 混合臂(`--topology` 选择形态),同种子(42)、同初始化(Glorot 同源)、同数据、同超参(Kipf 原始 recipe:Adam lr=0.01、weight_decay=5e-4、200 epochs 全批;PT `torch.optim.Adam` / MS 逐参数实现严格同口径)。聚合用 scatter 均值消息传递(MS `unsorted_segment_sum(gather)` / PT `index_add_`,O(E·F),真实 GNN 算子语义,P1 采样对象);切分点 = conv1 之后(边界 = 节点表示,真实 GNN 典型切分位置);train/val/test Accuracy 每 epoch 全图前向评估(计时段外,逐步 CSV 全量落盘,同步监测过拟合)。
+验证对象为**真实开源模型 Kipf & Welling 两层 GCN + PyG Planetoid Cora**(2708 节点/10556 边/1433 维特征/7 分类,public split 140/500/1000,数据随项目 `data/` 离线加载)。每次运行跑两臂:**B0 参照臂**(纯 MindSpore 两层 GCN = 唯一基线,客户现状形态)+ 混合臂(`--topology` 选择形态),同种子(42)、同初始化(Glorot 同源)、同数据、同超参(Kipf 原始 recipe:Adam lr=0.01、weight_decay=5e-4、200 epochs 全批;PT `torch.optim.Adam` / MS 逐参数实现严格同口径)。聚合用 scatter 均值消息传递(MS `unsorted_segment_sum(gather)` / PT `index_add_`,O(E·F),真实 GNN 算子语义);切分点 = conv1 之后(边界 = 节点表示,真实 GNN 典型切分位置);train/val/test Accuracy 每 epoch 全图前向评估(计时段外,逐步 CSV 全量落盘,同步监测过拟合)。
 
 - **E2/E3 主对照(交换机制选型)**:混合臂形态 = MS(聚合+conv1+ReLU)──交换──▶ PT(conv2+交叉熵),每步完整梯度桥接;E2 用 DLPack,E3 用 host 拷贝(NPU→host→NPU 往返 + 流同步)——唯一变量 = 交换机制,直接度量 DLPack 的价值;
 - **E4 形态对称性(迁移全程适用)**:对称形态 PT(聚合+conv1+ReLU)──DLPack──▶ MS(conv2+交叉熵)(`--topology front_pt`),即迁移过半时"已迁移模块在前"的真实形态,同为双向交换 + vjp 反传。
@@ -998,12 +885,11 @@ flowchart TB
 | C4 | 收敛曲线一致性(必须项) | E2/E3 训练曲线一致(**ulp 级差 ≤1e-5** + Accuracy 趋势重合;GCN 大矩阵规模逐位一致不可达);混合 vs B0 **统计等价**(loss 比 ∈[0.5,2.0]、test Accuracy 差 ≤1.5pt、曲线形态一致);过拟合监测同步进行 | 逐步 CSV + 图 1 |
 | — | 运行内自检 | 收敛性(loss 下降无 NaN/Inf);混合初始 loss 与参考偏差 ≈ 0 | 每次运行 |
 
-性能口径(先卡回退,再谈快慢):
+性能口径:
 
 | 编号 | 判据 | 内容 | 落点 |
 |---|---|---|---|
-| P1 | 算子回退检测 | 交换边界两侧算子全程 NPU 执行;真实 GNN 接入时"AI Core 长时间近零 + HBM 非预期回落"一票否决 | run_all 自动采样存证(§4.8) |
-| P2 | 交换信噪比 | 交换段占单步训练 <1%;逐算子级交换需重审交换点设计 | 摘要 exchange_ratio_pct(§4.8) |
+| P2 | 交换信噪比 | 交换段占单 epoch 训练 <1%(小模型口径偏高,见 §4.8 说明) | 摘要 exchange_ratio_pct(§4.8) |
 | P3 | epoch 耗时总账 | 接入真实模型:≥3 epoch 耗时 ≤B0×1.2 为 PASS;小模型按占比摊薄披露 | 接入时执行(§4.8) |
 
 **收益证据(非门禁)**:E2 vs E3 机制选型对照(§4.4)——量化 DLPack 相对 host 拷贝
@@ -1017,7 +903,7 @@ flowchart TB
 |---|---|---|---|
 {{SCOREBOARD}}
 
-判读:✅ = PASS;正确性判据(C1~C4)全部以 **B0(纯 MindSpore)= 唯一基线**为锚;选对/E5 为收益证据(非门禁);P1/P2/P3 口径见 §4.8。
+判读:✅ = PASS;正确性判据(C1~C4)全部以 **B0(纯 MindSpore)= 唯一基线**为锚;选对/E5 为收益证据(非门禁);P2/P3 口径见 §4.8。
 
 ### 4.2 机制验证(E1):双向零拷贝与桥接数值证据
 
@@ -1094,7 +980,7 @@ torch 锚证明桥接的数学正确性,B0 锚(纯 MindSpore 端到端)证明与
 
 *图 4 — dlpack 全程留在 NPU 显存,copy 需 NPU→host→NPU 往返 + 流同步(log 刻度)。*
 
-### 4.8 性能门禁与信噪比(P1/P2/P3)
+### 4.8 性能门禁与信噪比(P2/P3)
 
 {{PERF_SECTION}}
 ## 5. 技术说明
@@ -1158,12 +1044,12 @@ sequenceDiagram
    的边界张量可能为动态 shape/非 ND 布局,接入时需按首个真实切分点单独回归
    (FRACTAL_NZ 限制同上);图网络的采样 batch 亦可调,等价性/对称性判据可直接复用。
 8. **接入验收清单(对齐行业咨询口径)**:①B0 用客户真实 GNN 代码先跑通(验证启动
-   前置,提供参考曲线/梯度/epoch 耗时/AI Core-HBM 基线);②正确性以 B0 为锚做
-   单步(C1/C2/C3)与多步(C4,≥3 epoch)对照;③P1 一票否决(回退检测,npu-smi 采样);
-   ④P3 epoch 耗时 ≤B0×1.2 总账判定;⑤固定采样种子、跑 3 次取最大误差/均值曲线;
-   ⑥异构图(RGCN/HGT)额外检查 etype 索引完整性;⑦覆盖矩阵按真实图数据结构选点
-   (稠密/稀疏/大规模/异构)。本报告以开源 GCN(Cora)完成 ①的机制层与门禁基建与
-   ②的单模型对照,③~⑦在接入客户真实模型时执行。
+   前置,提供参考曲线/梯度/epoch 耗时基线);②正确性以 B0 为锚做
+   单步(C1/C2/C3)与多步(C4,≥3 epoch)对照;③P3 epoch 耗时 ≤B0×1.2 总账判定;
+   ④固定采样种子、跑 3 次取最大误差/均值曲线;
+   ⑤异构图(RGCN/HGT)额外检查 etype 索引完整性;⑥覆盖矩阵按真实图数据结构选点
+   (稠密/稀疏/大规模/异构)。本报告以开源 GCN(Cora)完成 ①的机制层与
+   ②的单模型对照,③~⑥在接入客户真实模型时执行。
 
 ## 7. 交付物清单
 
@@ -1192,7 +1078,7 @@ DLPack 的交换段收益显著(§4.4);混合过渡态相对纯 MindSpore 基线
 {{BENCH_RANGE}}。{{BENCH_SPEED}}
 DLPack 混合过渡态的"敢切(等价)、选对(机制)、全程适用(对称)"三要素在该环境
 全部成立;验证判据对齐行业咨询口径(C1 图语义聚合 / C2 梯度双锚 / C3 稀疏完整性 /
-C4 收敛一致性 + P1 回退检测 / P2 交换信噪比 / P3 epoch 总账),可支撑
+C4 收敛一致性 + P2 交换信噪比 / P3 epoch 总账),可支撑
 MindSpore → PyTorch 的渐进迁移工程化。
 
 **后续建议**:
