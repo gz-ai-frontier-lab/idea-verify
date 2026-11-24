@@ -246,7 +246,7 @@ def main():
                 "(pip install openpyxl)\n")
         tee(f"### 完整日志: {log_path}\n")
         tee("### 下一步: 把 results/ 目录拷回 Windows, 运行 "
-            "python scripts/report/make_report.py 生成最终验证报告\n")
+            "python scripts/report/make_report.py 生成证据图表\n")
     return 0
 
 

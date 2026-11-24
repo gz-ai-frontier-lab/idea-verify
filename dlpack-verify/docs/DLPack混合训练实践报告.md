@@ -351,7 +351,7 @@ opt_pt.step(); opt_ms.step([grads[1], grads[2]])  # ⑥ 两侧参数同一步更
 
 **④ 判据体系与记分板呈现**（C1 ~ C4 + P1 ~ P2）；
 
-**⑤ 一键编排与落盘**：run_all 顺序执行 + 摘要 JSON + 逐步 CSV + 数据核对版报告；
+**⑤ 一键编排与落盘**：run_all 顺序执行 + 摘要 JSON + 逐步 CSV + 数据工作簿（xlsx）；
 
 **⑥ bench 尺寸扫描方法**：与模型解耦的机制级收益上界。
 
@@ -432,7 +432,7 @@ python scripts/experiments/gcn_hybrid.py --device npu --topology front_pt --rtol
 python scripts/experiments/gcn_hybrid.py --device npu --bench                       # E5
 ```
 
-数据随项目 `data/Cora/` 离线加载，无需联网；固定 seed=42，全部结果可复现。交付物：`scripts/experiments/`（4 个脚本）+ `scripts/report/`（自动核对版报告与数据工作簿）+ `charts/` 四张证据图 + `results/npu/`（摘要 JSON、逐步 CSV、运行日志）。
+数据随项目 `data/Cora/` 离线加载，无需联网；固定 seed=42，全部结果可复现。交付物：`scripts/experiments/`（4 个脚本）+ `scripts/report/`（证据图表生成与数据工作簿）+ `charts/` 四张证据图 + `results/npu/`（摘要 JSON、逐步 CSV、运行日志）。
 
 ## 7 限制与下一步
 
