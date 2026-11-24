@@ -6,15 +6,15 @@ export_xlsx.py — 把 results/{dev}/ 下的机器可读摘要与逐步日志整
 Sheet 规划:
     摘要总览      : 各摘要 JSON 的全部字段 (来源/指标/值 平铺)
     机制验证      : verify_summary 的 checks 明细 + meas 数值
-    E2_训练曲线   : dlpack 逐步数据 (step/loss/val_loss/ref_loss/ref_val_loss/t_ms)
-    E3_训练曲线   : copy 逐步数据 (同列)
-    E4_对称形态   : front_pt 逐步数据 (同列)
+    E2_训练曲线   : GCN dlpack 逐步数据 (epoch/train_loss/val_acc/test_acc/ref_*/t_ms)
+    E3_训练曲线   : GCN copy 逐步数据 (同列)
+    E4_对称形态   : GCN front_pt 逐步数据 (同列)
     E5_bench扫描  : 尺寸扫描各行 (兼容 v1 单尺寸)
 
 用法:
     from export_xlsx import export_xlsx
     export_xlsx("npu")        # -> results/npu/results_YYYYMMDD_HHMMSS.xlsx
-    python scripts/export_xlsx.py [--device npu]   # 独立运行
+    python scripts/report/export_xlsx.py [--device npu]   # 独立运行
 """
 import csv
 import json
@@ -25,9 +25,17 @@ import time
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 TRAIN_FILES = [  # (sheet 名, 摘要文件, 逐步 CSV 文件)
-    ("E2_训练曲线", "train_summary_h64_dlpack.json", "training_log_dlpack_h64.csv"),
-    ("E3_训练曲线", "train_summary_h64_copy.json", "training_log_copy_h64.csv"),
-    ("E4_对称形态", "train_summary_h64_dlpack_sym.json", "training_log_dlpack_h64_sym.csv"),
+    ("E2_训练曲线", "gcn_summary_dlpack.json", "gcn_log_dlpack.csv"),
+    ("E3_训练曲线", "gcn_summary_copy.json", "gcn_log_copy.csv"),
+    ("E4_对称形态", "gcn_summary_dlpack_sym.json", "gcn_log_dlpack_sym.csv"),
+]
+
+SUMMARY_FILES = [
+    ("verify_summary.json", "机制验证 (E1)"),
+    ("gcn_summary_dlpack.json", "E2 GCN 混合训练 dlpack"),
+    ("gcn_summary_copy.json", "E3 GCN 混合训练 copy"),
+    ("gcn_summary_dlpack_sym.json", "E4 GCN 对称形态 front_pt"),
+    ("bench_summary.json", "E5 bench 尺寸扫描"),
 ]
 
 
@@ -60,6 +68,37 @@ def _write_table(ws, headers, rows, header_font):
         ws.append(list(r))
 
 
+def _gcn_params(summary):
+    """GCN 摘要 -> [(参数/指标, 值)] (含 B0 参照臂与等价性判定)。"""
+    res = summary.get("results", {}) or {}
+    cal = summary.get("m4_calibration", {}) or {}
+    ref = summary.get("ms_ref", {}) or {}
+    eq = summary.get("eq", {}) or {}
+    return [
+        ("exchange", summary.get("exchange")),
+        ("topology", summary.get("topology", "front_ms")),
+        ("hidden", summary.get("hidden")), ("epochs", summary.get("epochs")),
+        ("lr", summary.get("lr")), ("weight_decay", summary.get("weight_decay")),
+        ("seed", summary.get("seed")), ("rtol", summary.get("rtol")),
+        ("final_loss", res.get("final_loss")),
+        ("final_val_acc", res.get("final_val_acc")),
+        ("final_test_acc", res.get("final_test_acc")),
+        ("lat_ms", res.get("lat_ms")),
+        ("exchange_fwd_us", res.get("exchange_fwd_us")),
+        ("exchange_bwd_us", res.get("exchange_bwd_us")),
+        ("exchange_ratio_pct", res.get("exchange_ratio_pct")),
+        ("converged", res.get("converged")),
+        ("M4 torch锚 rel_err", cal.get("rel_err")),
+        ("M4 B0锚 rel_err", cal.get("ms_rel_err")),
+        ("M4 pass", cal.get("pass")),
+        ("B0 final_loss", ref.get("final_loss")),
+        ("B0 final_test_acc", ref.get("final_test_acc")),
+        ("eq loss比", eq.get("final_ratio")),
+        ("eq acc差(pt)", eq.get("acc_gap_pt")),
+        ("eq pass", eq.get("pass")),
+    ]
+
+
 def export_xlsx(dev="npu", out_dir=None):
     """整合 results/{dev}/ 数据 -> xlsx, 返回输出路径。"""
     from openpyxl import Workbook
@@ -72,17 +111,9 @@ def export_xlsx(dev="npu", out_dir=None):
     # ---- Sheet: 摘要总览 (全部摘要字段平铺) ----
     ws = wb.active
     ws.title = "摘要总览"
-    summary_files = [
-        ("verify_summary.json", "机制验证"),
-        ("train_summary_h64_dlpack.json", "E2 混合训练 dlpack"),
-        ("train_summary_h64_copy.json", "E3 混合训练 copy"),
-        ("train_summary_h64_dlpack_sym.json", "E4 对称形态 front_pt"),
-        ("bench_summary.json", "E5 bench 尺寸扫描"),
-        ("gcn_summary_dlpack.json", "E6 GCN on Cora"),
-    ]
     _write_table(ws, ["来源", "指标", "值"], [], bold)
     any_summary = False
-    for fname, tag in summary_files:
+    for fname, tag in SUMMARY_FILES:
         data = _load_json(os.path.join(dev_dir, fname))
         if data is None:
             ws.append([tag, f"({fname} 不存在, 待复测)", ""])
@@ -109,8 +140,9 @@ def export_xlsx(dev="npu", out_dir=None):
     else:
         _write_table(ws, ["提示"], [("verify_summary.json 不存在",)], bold)
 
-    # ---- Sheets: 各训练跑逐步曲线 ----
-    curve_headers = ["step", "loss", "val_loss", "ref_loss", "ref_val_loss", "t_ms"]
+    # ---- Sheets: GCN 各跑逐步曲线 ----
+    curve_headers = ["epoch", "train_loss", "val_acc", "test_acc",
+                     "ref_loss", "ref_val_acc", "ref_test_acc", "t_ms"]
     for sheet, sname, cname in TRAIN_FILES:
         ws = wb.create_sheet(sheet)
         summary = _load_json(os.path.join(dev_dir, sname))
@@ -118,29 +150,19 @@ def export_xlsx(dev="npu", out_dir=None):
             _write_table(ws, ["提示"],
                          [(f"{sname} 不存在 — 用当前脚本重跑后生成",)], bold)
             continue
-        params = [("exchange", summary.get("exchange")),
-                  ("topology", summary.get("topology", "front_ms")),
-                  ("hidden", summary.get("hidden")), ("batch", summary.get("batch")),
-                  ("lr", summary.get("lr")), ("steps", summary.get("steps")),
-                  ("seed", summary.get("seed")), ("rtol", summary.get("rtol"))]
-        res = summary.get("results", {})
-        params += [("final_loss", res.get("final_loss", res.get("final_loss_b"))),
-                   ("eval_mse", res.get("eval_mse", res.get("eval_b"))),
-                   ("lat_ms", res.get("lat_ms", res.get("lat_b_ms"))),
-                   ("exchange_fwd_us", res.get("exchange_fwd_us")),
-                   ("exchange_bwd_us", res.get("exchange_bwd_us")),
-                   ("M4 rel_err", (summary.get("m4_calibration") or {}).get("rel_err"))]
-        _write_table(ws, ["参数/指标", "值"], params, bold)
+        _write_table(ws, ["参数/指标", "值"], _gcn_params(summary), bold)
         ws.append([])
         cpath = os.path.join(dev_dir, cname)
         if os.path.exists(cpath):
             ws.append([f"逐步曲线 ({cname})"])
+            ws.append(curve_headers)
             with open(cpath, newline="", encoding="utf-8") as f:
                 reader = csv.reader(f)
+                next(reader, None)   # 跳过 CSV 自带表头 (上方已写 curve_headers)
                 for row in reader:
                     ws.append(row)
         else:
-            ws.append([f"逐步曲线 ({cname}) 不存在 — 旧版运行无此日志, 重跑后生成"])
+            ws.append([f"逐步曲线 ({cname}) 不存在 — 重跑后生成"])
 
     # ---- Sheet: bench 尺寸扫描 ----
     ws = wb.create_sheet("E5_bench扫描")
@@ -148,13 +170,13 @@ def export_xlsx(dev="npu", out_dir=None):
     if bench is None:
         _write_table(ws, ["提示"], [("bench_summary.json 不存在",)], bold)
     elif isinstance(bench.get("sizes"), list):
-        rows = [(r.get("batch"), r.get("boundary"),
+        rows = [(r.get("nodes"), r.get("boundary"),
                  r["fwd_dlpack_us"], r["fwd_copy_us"],
                  r["fwd_copy_us"] / max(r["fwd_dlpack_us"], 1e-9),
                  r["bwd_dlpack_us"], r["bwd_copy_us"],
                  r["bwd_copy_us"] / max(r["bwd_dlpack_us"], 1e-9))
                 for r in bench["sizes"]]
-        _write_table(ws, ["batch", "边界张量", "fwd_dlpack_us", "fwd_copy_us",
+        _write_table(ws, ["nodes", "边界张量", "fwd_dlpack_us", "fwd_copy_us",
                           "fwd 慢倍数", "bwd_dlpack_us", "bwd_copy_us",
                           "bwd 慢倍数"], rows, bold)
     else:  # v1 单尺寸扁平格式
@@ -171,7 +193,7 @@ def export_xlsx(dev="npu", out_dir=None):
 
 
 def main():
-    dev = "cpu"
+    dev = "npu"
     if "--device" in sys.argv:
         dev = sys.argv[sys.argv.index("--device") + 1]
     path = export_xlsx(dev)

@@ -26,19 +26,23 @@ PY = sys.executable
 def start_smi_sampler(dev, tag, out_dir, interval=1.0):
     """P1 回退检测采样 (仅 NPU): 后台采集 npu-smi 的 AI Core/HBM 利用率到 CSV。
 
-    npu-smi 各版本的参数与 card 编号差异大 (910B 服务器 card id 常从 40 起,
-    -i 0 会报 Invalid card id), 采样器分两步自适应:
-      1) 跑无参 `npu-smi info` 从表格解析 card id (失败回退 [0, 1, 40, 41]);
-      2) 对每个 card 依次试 `-t usages / -t common / -t board`, 锁定第一个
-         输出含 AI Core 数值的 (card, type) 组合; 全部失败时把完整输出落盘
-         raw 列供人工定位。
+    npu-smi 各版本参数与 card 编号差异大 (910B 服务器 card id 可能不从 0 起),
+    且多卡/容器场景下**首个能解析出数值的卡不一定是训练在用的卡** (v3 曾因此
+    锁定空闲卡, 全程采到 AI Core=0), v4 策略:
+      1) 跑无参 `npu-smi info` 从表格解析全部 card id (失败回退 [0, 1, 40, 41]);
+      2) 每个采样周期对**所有** card 各采一次, 命令按 usages/common/board 顺序
+         试到首个能解析出占用率的并记住该卡的可用命令 (逐卡记忆, 不全局锁定);
+      3) 解析只认占用率口径: 行含 aicore/ai core/hbm 且排除 capacity/total/
+         count 行, 数值 >100 视为容量/内存值丢弃, "已用/容量" 双数值行按比例
+         换算百分比; 每卡首个成功输出把原始文本落盘 raw 列 (截断), 供人工核对。
     返回 (stop_event, csv_path); cpu 环境返回 None。"""
     if dev != "npu":
         return None
     ts = time.strftime("%Y%m%d_%H%M%S")
     path = os.path.join(out_dir, f"smi_{tag}_{ts}.csv")
     stop = threading.Event()
-    state = {"chosen": None, "cards": None}
+    state = {"cards": None, "type_of": {}}   # card -> 已探明的 -t 类型
+    raw_logged = set()                       # 已落盘过 raw 输出的 card
 
     def run(cmd):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -53,62 +57,66 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
                 ordered.append(i)
         return ordered or ["0", "1", "40", "41"]
 
+    def pick_pct(line):
+        """行内取占用率: >100 的数字视为容量/内存值丢弃; "已用/容量" 双数值行
+        (如 HBM `32768 65536`) 按比例换算为百分比。"""
+        nums = [float(x) for x in re.findall(r"\d+\.?\d*", line)]
+        if len(nums) == 2 and nums[1] > nums[0] > 0:
+            return round(nums[0] / nums[1] * 100, 1)
+        ok = [x for x in nums if x <= 100]
+        return ok[-1] if ok else None
+
     def parse(text):
-        aicore = hbm = ""
+        aicore = hbm = None
         for line in text.splitlines():
             low = line.lower()
-            if ("aicore" in low or "ai core" in low) and any(c.isdigit() for c in line):
-                digits = re.findall(r"\d+\.?\d*", line)
-                if digits:
-                    aicore = aicore or digits[-1]
-            elif "hbm" in low and any(c.isdigit() for c in line):
-                digits = re.findall(r"\d+\.?\d*", line)
-                if digits:
-                    hbm = hbm or digits[-1]
+            if not any(c.isdigit() for c in line):
+                continue
+            if "capacity" in low or "total" in low or "count" in low:
+                continue
+            if aicore is None and ("aicore" in low or "ai core" in low):
+                aicore = pick_pct(line)
+            elif hbm is None and "hbm" in low:
+                hbm = pick_pct(line)
         return aicore, hbm
 
     def loop():
         with open(path, "w", encoding="utf-8") as f:
-            f.write("unix_ts,cmd,aicore_pct,hbm_pct,ok,raw\n")
+            f.write("unix_ts,card,cmd,aicore_pct,hbm_pct,ok,raw\n")
             while not stop.is_set():
-                logged = False
-                if state["chosen"]:
-                    cmd_t, a, h = state["chosen"]
-                    cmd_str = " ".join(cmd_t).replace('"', "'")
-                    f.write(f"{time.time()},'{cmd_str}',{a},{h},1,\n")
-                    logged = True
-                else:
-                    if state["cards"] is None:
+                if state["cards"] is None:
+                    try:
+                        text = run(["npu-smi", "info"])
+                        state["cards"] = discover_cards(text)
+                        f.write(f"{time.time()},,'npu-smi info',,,,1,"
+                                f"\"cards discovered: {','.join(state['cards'])}\"\n")
+                    except Exception as e:  # noqa: BLE001
+                        state["cards"] = ["0", "1", "40", "41"]
+                        f.write(f"{time.time()},,,,0,"
+                                f"\"card discovery failed: {type(e).__name__}: {e}\"\n")
+                for card in state["cards"]:
+                    typ = state["type_of"].get(card)
+                    got = ("", "", "", 0, "")
+                    for t in ([typ] if typ else ["usages", "common", "board"]):
+                        cmd = ["npu-smi", "info", "-t", t, "-i", card]
                         try:
-                            text = run(["npu-smi", "info"])
-                            cards = discover_cards(text)
-                            state["cards"] = cards
-                            f.write(f"{time.time()},'npu-smi info',,,,1,"
-                                    f"\"cards discovered: {','.join(cards)}\"\n")
+                            out = run(cmd).strip()
                         except Exception as e:  # noqa: BLE001
-                            state["cards"] = ["0", "1", "40", "41"]
-                            f.write(f"{time.time()},,,,0,"
-                                    f"\"card discovery failed: {type(e).__name__}: {e}\"\n")
-                    tried = []
-                    for card in state["cards"]:
-                        for typ in ("usages", "common", "board"):
-                            cmd = ["npu-smi", "info", "-t", typ, "-i", card]
-                            try:
-                                out = run(cmd).strip()
-                            except Exception as e:  # noqa: BLE001
-                                out = f"{type(e).__name__}: {e}"
-                            a, h = parse(out)
-                            tried.append(f"{' '.join(cmd)} -> aicore={a or '-'}")
-                            if a != "":
-                                state["chosen"] = (tuple(cmd), a, h)
-                                logged = True
-                                break
-                            time.sleep(0.05)
-                        if logged:
+                            out = f"{type(e).__name__}: {e}"
+                        a, h = parse(out)
+                        cmd_str = " ".join(cmd).replace('"', "'")
+                        if a is not None or h is not None:
+                            state["type_of"][card] = t
+                            got = (cmd_str, "" if a is None else a,
+                                   "" if h is None else h, 1, out)
                             break
-                    if not logged:
-                        f.write(f"{time.time()},,,,0,\"tried: "
-                                f"{'; '.join(tried[:6])[:1200]}\"\n")
+                        got = (cmd_str, "", "", 0, out)
+                    cmd_str, a, h, ok, out = got
+                    raw = ""
+                    if card not in raw_logged:
+                        raw_logged.add(card)
+                        raw = '"' + out.replace('"', "'")[:1000] + '"'
+                    f.write(f"{time.time()},{card},'{cmd_str}',{a},{h},{ok},{raw}\n")
                 f.flush()
                 stop.wait(interval)
 
@@ -184,8 +192,8 @@ def main():
             tee(f"### [{i}/{len(stages)}] {tag} — {desc}\n")
             tee(f"### cmd: {PY} {cmd[0]} {' '.join(cmd[1:])}\n")
             tee("#" * 78 + "\n")
-            sampler = start_smi_sampler(a.device, tag, out_dir) \
-                if tag in ("E2", "E3", "E4") else None
+            sampler = start_smi_sampler(a.device, tag.rstrip("*"), out_dir) \
+                if tag.rstrip("*") in ("E2", "E3", "E4") else None
             if sampler:
                 tee(f"### [P1] npu-smi 回退检测采样已启动: {sampler[1]}\n")
             t0 = time.perf_counter()
@@ -226,7 +234,7 @@ def main():
                 "(pip install openpyxl)\n")
         tee(f"### 完整日志: {log_path}\n")
         tee("### 下一步: 把 results/ 目录拷回 Windows, 运行 "
-            "python scripts/make_report.py 生成最终验证报告\n")
+            "python scripts/report/make_report.py 生成最终验证报告\n")
     return 0
 
 
