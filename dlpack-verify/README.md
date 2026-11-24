@@ -1,6 +1,6 @@
 # DLPack 混合过渡态验证: MindSpore → PyTorch 渐进迁移 (零拷贝交换 + 梯度桥接)
 
-**业务背景**:业界训练框架以 PyTorch 为主,生态更丰富;基于 MindSpore 实现的存量模型存在渐进迁移诉求,且迁移周期与模型演进并行、无法一次性重写——选择 DLPack 混合编程作为**迁移过渡态**:未迁移模块留在 MS,已迁移模块改用 PT,边界两侧零拷贝交换 + sens 梯度桥接联合训练。以**真实开源模型 GCN on Cora 为载体**(图网络代表例子,不限定迁移对象本身)在 **昇腾 910B(Atlas A2)** 上验证过渡态的"敢切(等价)、选对(机制)、全程适用(对称)",交付 docs/DLPack混合训练实践报告.md。
+**业务背景**:业界训练框架以 PyTorch 为主,生态更丰富;基于 MindSpore 实现的存量模型存在渐进迁移诉求,且迁移周期与模型演进并行、无法一次性重写——选择 DLPack 混合编程作为**迁移过渡态**:未迁移模块留在 MS,已迁移模块改用 PT,边界两侧零拷贝交换 + sens 梯度桥接联合训练。以**真实开源模型 GCN on Cora 为载体**(图网络代表例子,不限定迁移对象本身)在 **昇腾 910B(Atlas A2)** 上验证过渡态的"敢切(等价)、选对(机制)、形态通用(对称)",交付 docs/DLPack混合训练实践报告.md。
 
 **工作流(一条主线,NPU 全跑 → 拷回 → Windows 出图)**:
 
@@ -15,7 +15,7 @@
 
 - **敢切(切换等价性)**:每次运行同跑 **MS 参照臂 B0**(纯 MindSpore 两层 GCN = 唯一基线)与混合臂,判收敛 / test Accuracy / 训练曲线统计等价——混合态 vs 现状"训练效果一致";
 - **选对(交换机制主对照 E2 vs E3)**:同为混合场景,唯一变量 = 交换机制(E2 = DLPack / E3 = host 拷贝)——混合前段的调度开销两跑完全相同,差值纯粹来自交换机制,归因天然干净;
-- **全程适用(形态对称性 E4)**:PT前段+MS后段(迁移过半形态)实测,证明切分方向不影响机制。
+- **形态通用(形态对称性 E4)**:PT前段+MS后段实测,证明切分方向不影响机制。
 
 ## 1. 目录结构
 
@@ -102,7 +102,7 @@ python scripts/experiments/run_all.py
 | E1 | 机制验证(11 STEP / 17 检查项,含 GNN C1/C3) | `python scripts/experiments/verify_dlpack.py --device npu --rtol 5e-3` | — | 零拷贝/桥接数学正确 |
 | **E2** | **GCN 混合训练(dlpack)** | `python scripts/experiments/gcn_hybrid.py --device npu --rtol 5e-3` | —(基准) | 收敛/切换等价性/C2 双锚 |
 | **E3** | **GCN 混合训练(copy 对照)** | `python scripts/experiments/gcn_hybrid.py --device npu --exchange copy --rtol 5e-3` | **仅交换方式: dlpack→host 拷贝** | **DLPack 交换机制的直接收益(主对照)** |
-| **E4** | **GCN 形态对称性(PT前段+MS后段)** | `python scripts/experiments/gcn_hybrid.py --device npu --topology front_pt --rtol 5e-3` | **仅混合形态: MS前段→PT前段** | 迁移过半形态机制成立(切分方向不影响) |
+| **E4** | **GCN 形态对称性(PT前段+MS后段)** | `python scripts/experiments/gcn_hybrid.py --device npu --topology front_pt --rtol 5e-3` | **仅混合形态: MS前段→PT前段** | 对称形态机制成立(切分方向不影响) |
 | E5 | 纯交换吞吐(尺寸扫描) | `python scripts/experiments/gcn_hybrid.py --device npu --bench`(默认节点 2708/16384/65536,`--bench-sizes` 自定) | 仅 bench 模式 + 边界张量尺寸档 | 收益随边界张量放大趋势(机制级上界) |
 
 **固定参数**(Kipf 原始 recipe,所有实验一致,勿随意改动):
@@ -158,7 +158,7 @@ python scripts\report\make_report.py
 收益证据(非门禁):
 
 - E2 vs E3 机制选型对照:交换段收益、epoch 时延收益(bench 为机制级上界);
-- **形态对称性(全程适用)**:E4(PT前段+MS后段,迁移过半形态)M4 双锚 + 收敛 + Accuracy 全通过即成立——切分方向不影响机制,迁移任何阶段都适用。
+- **形态对称性**:E4(PT前段+MS后段)M4 双锚 + 收敛 + Accuracy 全通过即成立——切分方向不影响机制,两种形态都适用。
 
 ## 6. verify_dlpack.py 的验证项 ↔ 验收标准映射
 

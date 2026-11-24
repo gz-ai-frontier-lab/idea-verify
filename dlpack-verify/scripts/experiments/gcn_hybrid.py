@@ -12,7 +12,7 @@ gcn_hybrid.py — 真实开源模型验证: GCN on Cora (MindSpore→PyTorch 混
       E2 (混合)     : MS(聚合+conv1+ReLU) ──DLPack──▶ PT(conv2+交叉熵)
       E3 (对照)     : 同 E2, 交换改为 host 拷贝 —— 唯一变量 = 交换机制
       E4 (对称形态) : PT(聚合+conv1+ReLU) ──DLPack──▶ MS(conv2+交叉熵)
-                      (--topology front_pt, 迁移过半形态)
+                      (--topology front_pt, 对称形态)
       E5 (--bench)  : 纯交换吞吐尺寸扫描 (与模型无关, 机制级上界)
 
     模型 (Kipf & Welling, ICLR 2017):
@@ -293,27 +293,27 @@ def build(args, data):
     b2_ref = torch.tensor(b2_np, device=CFG["device"], requires_grad=True)
 
     # MS 参数 (B0 参照臂) —— 同源拷贝
-    w1m = Parameter(MSTensor(w1_np), name="w1m")
-    b1m = Parameter(MSTensor(b1_np), name="b1m")
-    w2m = Parameter(MSTensor(w2_np), name="w2m")
-    b2m = Parameter(MSTensor(b2_np), name="b2m")
+    w1_b0 = Parameter(MSTensor(w1_np), name="w1_b0")
+    b1_b0 = Parameter(MSTensor(b1_np), name="b1_b0")
+    w2_b0 = Parameter(MSTensor(w2_np), name="w2_b0")
+    b2_b0 = Parameter(MSTensor(b2_np), name="b2_b0")
 
     # 混合臂 front_ms: MS 前段 (conv1) + PT 后段 (conv2); 权重同源拷贝
-    w_ref = Parameter(MSTensor(w1_np.copy()), name="front_w1")
-    b_ref = Parameter(MSTensor(b1_np.copy()), name="front_b1")
+    w1_ms = Parameter(MSTensor(w1_np.copy()), name="front_w1")
+    b1_ms = Parameter(MSTensor(b1_np.copy()), name="front_b1")
     w2_t = torch.tensor(w2_np, device=CFG["device"]).requires_grad_(True)
     b2_t = torch.tensor(b2_np, device=CFG["device"]).requires_grad_(True)
-    opt_b = torch.optim.Adam([w2_t, b2_t], lr=args.lr, weight_decay=args.weight_decay)
+    opt_pt = torch.optim.Adam([w2_t, b2_t], lr=args.lr, weight_decay=args.weight_decay)
 
     # 混合臂 front_pt (对称形态): PT 前段 (conv1, torch 参数) + MS 后段 (conv2,
     # 独立参数副本——各臂互不污染)
     w1_t = torch.tensor(w1_np, device=CFG["device"]).requires_grad_(True)
     b1_t = torch.tensor(b1_np, device=CFG["device"]).requires_grad_(True)
     opt_sym_pt = torch.optim.Adam([w1_t, b1_t], lr=args.lr, weight_decay=args.weight_decay)
-    w2s = Parameter(MSTensor(w2_np.copy()), name="sym_w2")
-    b2s = Parameter(MSTensor(b2_np.copy()), name="sym_b2")
+    w2_ms = Parameter(MSTensor(w2_np.copy()), name="sym_w2")
+    b2_ms = Parameter(MSTensor(b2_np.copy()), name="sym_b2")
 
-    front = (lambda x, w1, b1: ops.relu(
+    ms_front_fn = (lambda x, w1, b1: ops.relu(
         ops.matmul(_agg_ms(x), w1) + b1))
     ref_fn = (lambda x, w1, b1, w2, b2: _ms_ce(
         _ms_logits(x, w1, b1, w2, b2), y_ms, idx_ms))
@@ -323,12 +323,12 @@ def build(args, data):
         "idx_ms": idx_ms,
         "y_np": data["y"], "masks": data["masks"], "f": f, "h": h, "c": c,
         "w1_ref": w1_ref, "b1_ref": b1_ref, "w2_ref": w2_ref, "b2_ref": b2_ref,
-        "w1m": w1m, "b1m": b1m, "w2m": w2m, "b2m": b2m,
-        "front": front, "ref_fn": ref_fn,
-        "w_ref": w_ref, "b_ref": b_ref,
-        "w2_t": w2_t, "b2_t": b2_t, "opt_b": opt_b,
+        "w1_b0": w1_b0, "b1_b0": b1_b0, "w2_b0": w2_b0, "b2_b0": b2_b0,
+        "ms_front_fn": ms_front_fn, "ref_fn": ref_fn,
+        "w1_ms": w1_ms, "b1_ms": b1_ms,
+        "w2_t": w2_t, "b2_t": b2_t, "opt_pt": opt_pt,
         "w1_t": w1_t, "b1_t": b1_t, "opt_sym_pt": opt_sym_pt,
-        "w2s": w2s, "b2s": b2s,
+        "w2_ms": w2_ms, "b2_ms": b2_ms,
     }
 
 
@@ -387,7 +387,7 @@ def exchange_grad_ms2pt(g_ms):
     return g_pt, time.perf_counter() - t0
 
 
-def _ms_back_ce(h_ms, w2, b2, y_ms, idx_ms):
+def _ms_tail_ce(h_ms, w2, b2, y_ms, idx_ms):
     """MS 后段 (对称形态): 聚合 -> W2 -> logits -> CE (vjp 标量种子)。"""
     logits = ops.matmul(_agg_ms(h_ms), w2) + b2
     return ops.cross_entropy(ops.gather(logits, idx_ms, 0), ops.gather(y_ms, idx_ms, 0))
@@ -408,8 +408,8 @@ def calibrate_m4(ctx, args):
     loss_ref.backward()
 
     if CFG["topology"] == "front_ms":
-        # 混合: MS front vjp -> 交换 -> PT conv2+CE -> backward -> sens 回传 -> vjp 反向
-        ms_out, bwd_fn = vjp(ctx["front"], ctx["x_ms"], ctx["w_ref"], ctx["b_ref"])
+        # 混合: MS ms_front_fn vjp -> 交换 -> PT conv2+CE -> backward -> sens 回传 -> vjp 反向
+        ms_out, bwd_fn = vjp(ctx["ms_front_fn"], ctx["x_ms"], ctx["w1_ms"], ctx["b1_ms"])
         pt_input, _ = exchange_forward(ms_out)
         pt_input.requires_grad_(True)
         logits = _pt_head(pt_input, ctx["w2_t"], ctx["b2_t"])
@@ -426,8 +426,8 @@ def calibrate_m4(ctx, args):
         h_ms, _ = exchange_activation(h_act)
         y_ms = ctx["y_ms"]
         idx_ms = ctx["idx_ms"]
-        loss, bwd_fn = vjp(lambda h, w2, b2: _ms_back_ce(h, w2, b2, y_ms, idx_ms),
-                           h_ms, ctx["w2s"], ctx["b2s"])
+        loss, bwd_fn = vjp(lambda h, w2, b2: _ms_tail_ce(h, w2, b2, y_ms, idx_ms),
+                           h_ms, ctx["w2_ms"], ctx["b2_ms"])
         mix_loss = float(to_np(loss))
         grads = bwd_fn(ms.Tensor(1.0))       # (dH, dw2, db2)
         g_pt, _ = exchange_grad_ms2pt(grads[0])
@@ -441,8 +441,8 @@ def calibrate_m4(ctx, args):
     # B0 锚: 纯 MS 端到端同权重单步梯度
     y_ms = ctx["y_ms"]
     idx_ms = ctx["idx_ms"]
-    _, ref_bwd = vjp(ctx["ref_fn"], ctx["x_ms"], ctx["w1m"], ctx["b1m"],
-                     ctx["w2m"], ctx["b2m"])
+    _, ref_bwd = vjp(ctx["ref_fn"], ctx["x_ms"], ctx["w1_b0"], ctx["b1_b0"],
+                     ctx["w2_b0"], ctx["b2_b0"])
     ref_g = ref_bwd(ms.Tensor(1.0))          # (dx, dw1, db1, dw2, db2)
 
     rel = lambda a, b: float(np.max(np.abs(a - b) / (np.abs(b) + 1e-6)))
@@ -475,7 +475,7 @@ def calibrate_m4(ctx, args):
 # ---------------------------------------------------------------------------
 def train_ref(ctx, args):
     ms = CFG["ms"]
-    params = (ctx["w1m"], ctx["b1m"], ctx["w2m"], ctx["b2m"])
+    params = (ctx["w1_b0"], ctx["b1_b0"], ctx["w2_b0"], ctx["b2_b0"])
     opt = MsAdam(params, args.lr, args.weight_decay)
     masks = ctx["masks"]
     hist_loss, hist_val, hist_test, times = [], [], [], []
@@ -497,9 +497,9 @@ def train_ref(ctx, args):
 
 
 def eval_mixed(ctx):
-    """混合前向评估: MS front -> 交换 -> PT conv2 (不计时)。"""
+    """混合前向评估: MS ms_front_fn -> 交换 -> PT conv2 (不计时)。"""
     with torch.no_grad():
-        ms_out = ctx["front"](ctx["x_ms"], ctx["w_ref"], ctx["b_ref"])
+        ms_out = ctx["ms_front_fn"](ctx["x_ms"], ctx["w1_ms"], ctx["b1_ms"])
         pt_input, _ = exchange_forward(ms_out)
         logits = _pt_head(pt_input, ctx["w2_t"], ctx["b2_t"])
         return _acc_np(logits.argmax(dim=1).cpu().numpy())
@@ -507,9 +507,9 @@ def eval_mixed(ctx):
 
 def train_mixed(ctx, args):
     ms = CFG["ms"]
-    front, w_ref, b_ref = ctx["front"], ctx["w_ref"], ctx["b_ref"]
-    w2_t, b2_t, opt_b = ctx["w2_t"], ctx["b2_t"], ctx["opt_b"]
-    opt_ms = MsAdam([w_ref, b_ref], args.lr, args.weight_decay)
+    ms_front_fn, w1_ms, b1_ms = ctx["ms_front_fn"], ctx["w1_ms"], ctx["b1_ms"]
+    w2_t, b2_t, opt_pt = ctx["w2_t"], ctx["b2_t"], ctx["opt_pt"]
+    opt_ms = MsAdam([w1_ms, b1_ms], args.lr, args.weight_decay)
 
     hist_loss, hist_val, hist_test, times = [], [], [], []
     val_curve, test_curve = [], []
@@ -520,7 +520,7 @@ def train_mixed(ctx, args):
     print(f"  [验证] epoch     0  val_acc={v0['val']:.4f}  test_acc={v0['test']:.4f}")
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
-        ms_out, bwd_fn = vjp(front, ctx["x_ms"], w_ref, b_ref)
+        ms_out, bwd_fn = vjp(ms_front_fn, ctx["x_ms"], w1_ms, b1_ms)
         pt_input, dt_f = exchange_forward(ms_out)
         t_fwd += dt_f
         pt_input.requires_grad_(True)
@@ -531,8 +531,8 @@ def train_mixed(ctx, args):
         sens, dt_b = exchange_backward(pt_input)
         t_bwd += dt_b
         _, dw1, db1 = bwd_fn(sens)
-        opt_b.step()
-        opt_b.zero_grad()
+        opt_pt.step()
+        opt_pt.zero_grad()
         opt_ms.step([dw1, db1])
         times.append(time.perf_counter() - t0)
         v = float(loss.item())
@@ -557,8 +557,8 @@ def train_sym(ctx, args):
     ms = CFG["ms"]
     w1_t, b1_t = ctx["w1_t"], ctx["b1_t"]
     opt_sym_pt = ctx["opt_sym_pt"]
-    w2s, b2s = ctx["w2s"], ctx["b2s"]
-    opt_ms_sym = MsAdam([w2s, b2s], args.lr, args.weight_decay)
+    w2_ms, b2_ms = ctx["w2_ms"], ctx["b2_ms"]
+    opt_ms_sym = MsAdam([w2_ms, b2_ms], args.lr, args.weight_decay)
     x_t, y_t = ctx["x_t"], ctx["y_t"]
     y_ms = ctx["y_ms"]
     idx_ms = ctx["idx_ms"]
@@ -578,8 +578,8 @@ def train_sym(ctx, args):
         h_ms, dt_f = exchange_activation(h_act)          # ① 交换 (PT→MS, 节点表示)
         t_fwd += dt_f
         # ② MS 后段 conv2+CE: vjp(标量 sens=1) 一次得 边界梯度 + fc2 梯度
-        loss, bwd_fn = vjp(lambda h, w2, b2: _ms_back_ce(h, w2, b2, y_ms, idx_ms),
-                           h_ms, w2s, b2s)
+        loss, bwd_fn = vjp(lambda h, w2, b2: _ms_tail_ce(h, w2, b2, y_ms, idx_ms),
+                           h_ms, w2_ms, b2_ms)
         grads = bwd_fn(ms.Tensor(1.0))
         g_ms, g_w2, g_b2 = grads[0], grads[1], grads[2]
         g_pt, dt_b = exchange_grad_ms2pt(g_ms)           # ③ 交换 (MS→PT, 边界梯度)
@@ -612,7 +612,7 @@ def eval_sym(ctx):
         agg = _agg_pt(ctx["x_t"])
         h_act = torch.relu(agg @ ctx["w1_t"] + ctx["b1_t"])
     h_ms, _ = exchange_activation(h_act)
-    logits = ops.matmul(_agg_ms(h_ms), ctx["w2s"]) + ctx["b2s"]
+    logits = ops.matmul(_agg_ms(h_ms), ctx["w2_ms"]) + ctx["b2_ms"]
     return _ms_acc(logits)
 
 

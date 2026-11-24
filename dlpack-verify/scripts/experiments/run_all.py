@@ -153,7 +153,7 @@ def build_stages(a):
         ("E3", "GCN 混合训练 copy 对照 + MS 参照臂 (唯一变量=交换机制)",
          [os.path.join(EXPERIMENTS, "gcn_hybrid.py")] + gcn
          + ["--exchange", "copy"]),
-        ("E4*", "GCN 形态对称性: PT前段+MS后段 + MS 参照臂 (迁移过半形态) [NPU 调试项, FAIL 不阻塞]",
+        ("E4*", "GCN 形态对称性: PT前段+MS后段 + MS 参照臂 (对称形态) [NPU 调试项, FAIL 不阻塞]",
          [os.path.join(EXPERIMENTS, "gcn_hybrid.py")] + gcn
          + ["--topology", "front_pt"]),
         ("E5", "GCN 纯交换吞吐尺寸扫描 (边界张量 173KB/1MB/4MB)",

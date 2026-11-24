@@ -306,7 +306,7 @@ def fig_scorecard():
     ax.set_ylim(1e-7, 3e-2)
     set_ticks(ax)
     ax.set_ylabel("最大相对误差 (log)")
-    ax.set_title("C2-M4 边界数值 (torch 锚, B0 锚见报告 §3.6)", fontsize=10)
+    ax.set_title("C2-M4 边界数值 (torch 锚, B0 锚见报告 §3.5)", fontsize=10)
     ax.grid(alpha=0.3, axis="y", which="both")
 
     # C4: E3/E2 final loss 比 (期望 1.000)
@@ -386,7 +386,7 @@ def fig_scorecard():
     fig.text(0.01, 0.008,
              "说明: 混合训练绝对 epoch 耗时的主体为 MindSpore PYNATIVE 单算子调度常数, "
              "该常数在 E2/E3 两种交换机制下完全相同 —— 主对照差值纯粹来自交换机制。\n"
-             "该绝对开销随模型规模增大被摊薄 (E4 实测见报告 §3.8), 生产规模按占比评估。",
+             "该绝对开销随模型规模增大被摊薄 (E4 实测见报告 §3.7), 生产规模按占比评估。",
              fontsize=7.5, va="bottom",
              bbox=dict(boxstyle="round", fc="#fff7e6", alpha=0.9))
     p = os.path.join(CHARTS_DIR, "metrics_scorecard.png")
