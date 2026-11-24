@@ -1,6 +1,6 @@
 # DLPack 混合过渡态验证: MindSpore → PyTorch 渐进迁移 (零拷贝交换 + 梯度桥接)
 
-**业务背景**:现有 GNN 模型基于 MindSpore,规划渐进迁移至 PyTorch;因迁移周期内模型持续演进、无法一次性重写,选择 DLPack 混合编程作为**迁移过渡态**——未迁移模块留在 MS,已迁移模块改用 PT,边界两侧零拷贝交换 + sens 梯度桥接联合训练。验证对象为**真实开源模型 Kipf & Welling 两层 GCN + PyG Planetoid Cora 数据集**。在 **昇腾 910B(Atlas A2)** 上验证过渡态的"敢切(等价)、选对(机制)、全程适用(对称)",最终由一个脚本生成验证报告。
+**业务背景**:业界训练框架以 PyTorch 为主,生态更丰富;基于 MindSpore 实现的存量模型存在渐进迁移诉求,且迁移周期与模型演进并行、无法一次性重写——选择 DLPack 混合编程作为**迁移过渡态**:未迁移模块留在 MS,已迁移模块改用 PT,边界两侧零拷贝交换 + sens 梯度桥接联合训练。以**真实开源模型 GCN on Cora 为载体**(图网络代表例子,不限定迁移对象本身)在 **昇腾 910B(Atlas A2)** 上验证过渡态的"敢切(等价)、选对(机制)、全程适用(对称)",交付 docs/DLPack混合训练实践报告.md。
 
 **工作流(一条主线,NPU 全跑 → 拷回 → Windows 出报告)**:
 
@@ -8,7 +8,7 @@
 910B 服务器(全部实验在这一步完成)            Windows(仅报告交付, 非验证对象)
 ├── python scripts/experiments/run_all.py     ├── 整个 results/ 目录拷回项目根目录
 │   (E0~E5 一条命令, tee 日志 + 自动 xlsx) ──▶ ├── python scripts\report\make_report.py
-└── 产物: results/npu/ 摘要 + 逐步 CSV + 日志  └── 产物: charts/ 四图 + docs/验证报告.md
+└── 产物: results/npu/ 摘要 + 逐步 CSV + 日志  └── 产物: charts/ 四图 + docs/DLPack混合训练实践报告.md
 ```
 
 **对照设计**(三要素):
@@ -28,13 +28,13 @@ dlpack-verify/
 │   │   ├── verify_dlpack.py    #   E1 机制验证 (11 STEP / 17 检查项, 含 GNN C1/C3)
 │   │   └── gcn_hybrid.py       #   E2/E3/E4/E5 (GCN 唯一验证脚本: B0 + 混合臂 + bench)
 │   └── report/                 # 报告与交付物生成 (Windows)
-│       ├── make_report.py      #   一键报告: 读 results/ 摘要 → 绘 4 图 + 渲染验证报告
+│       ├── make_report.py      #   数据核对版: 读 results/ 摘要 → 绘 4 图 + 生成实践报告_数据核对.md
 │       ├── export_xlsx.py      #   数据结果整合: 多 sheet Excel 工作簿 (时间戳命名)
 │       └── unwrap_md.py        #   md 段落解包 (make_report 内部依赖)
 ├── data/Cora/                  # 数据集 (离线加载, 服务器免联网)
 ├── docs/                       # 文档
-│   ├── 验证报告.md             #   最终交付报告 (手写维护, 博文风格; 数据源自 results/)
-│   ├── 验证报告_autogen.md     #   自动核对版 (make_report.py 生成, 与手写版数据同源)
+│   ├── DLPack混合训练实践报告.md  # 最终交付报告 (手写维护, 博文风格; 数据源自 results/)
+│   ├── 实践报告_数据核对.md       # 数据核对版 (make_report.py 生成, 与手写版数据同源)
 │   └── 代码解读.md             #   verify_dlpack.py 代码解读 (Mermaid 图)
 ├── charts/                     # 报告引用的证据图 ×4 (make_report.py 生成)
 ├── results/                    # 运行产物 (脚本自动落盘, 按设备分目录)
@@ -70,7 +70,7 @@ dlpack-verify/
 | `scripts/experiments/check_env.py` | E0 环境自检(torch_npu/NPU/CANN/双向 DLPack 冒烟;run_all 已含) | 910B(可单跑) |
 | `scripts/experiments/verify_dlpack.py` | E1 机制验证(11 STEP / 17 检查项,含 GNN C1/C3) | 910B(单独重跑时) |
 | `scripts/experiments/gcn_hybrid.py` | E2/E3/E4/E5 唯一训练验证脚本(B0 参照臂 + 混合臂 + bench) | 910B(单独重跑时) |
-| `scripts/report/make_report.py` | **一键报告**:读 results/ → 绘 4 图 + 渲染验证报告.md | **Windows(交付)** |
+| `scripts/report/make_report.py` | **数据核对版报告**:读 results/ → 绘 4 图 + 生成实践报告_数据核对.md | **Windows** |
 | `scripts/report/export_xlsx.py` | 多 sheet 数据工作簿(run_all / make_report 自动调用) | 两者皆可 |
 | `scripts/report/unwrap_md.py` | md 段落解包(make_report 内部依赖) | — |
 
@@ -137,9 +137,9 @@ python scripts/experiments/run_all.py
 python scripts\report\make_report.py
 ```
 
-产出:`charts/` 四张证据图(GCN 三臂曲线 / E2vE3 主对照 / 判据评分卡 / bench 尺寸扫描)+ `docs\验证报告_autogen.md`(自动核对版, 与手写交付版 docs\验证报告.md 数据同源)+ `results\<时间戳>.xlsx`。
+产出:`charts/` 四张证据图(GCN 三臂曲线 / E2vE3 主对照 / 判据评分卡 / bench 尺寸扫描)+ `docs\实践报告_数据核对.md`(数据核对版, 与手写交付版 docs\DLPack混合训练实践报告.md 数据同源)+ `results\<时间戳>.xlsx`。
 
-`make_report.py` 读取 `results/{npu|cpu}/` 下的 `verify_summary.json`、`gcn_summary_{dlpack|copy|dlpack_sym}.json`、`bench_summary.json` 与逐步训练 CSV,**数据优先级 npu > cpu**(有真机摘要时绝不使用 cpu 数据)。正式条件 = npu 的 verify + E2 + E3 三份摘要齐备;缺项时生成 `docs\验证报告_draft.md`(不覆盖正式报告)并在控制台列出补跑命令。
+`make_report.py` 读取 `results/{npu|cpu}/` 下的 `verify_summary.json`、`gcn_summary_{dlpack|copy|dlpack_sym}.json`、`bench_summary.json` 与逐步训练 CSV,**数据优先级 npu > cpu**(有真机摘要时绝不使用 cpu 数据)。正式条件 = npu 的 verify + E2 + E3 三份摘要齐备;缺项时生成 `docs\实践报告_数据核对_draft.md` 并在控制台列出补跑命令(交付版 docs\DLPack混合训练实践报告.md 为手写维护,不会被覆盖)。
 
 ## 5. 判读要点(判据体系:正确性 C1~C4 / 性能 P1~P2,对齐行业咨询口径)
 
