@@ -1,0 +1,33 @@
+{
+  "kind": "gcn_bench",
+  "version": 2,
+  "device": "npu:0",
+  "hidden": 16,
+  "n": 50,
+  "sizes": [
+    {
+      "nodes": 2708,
+      "boundary": "169 KB",
+      "fwd_dlpack_us": 18.74089241027832,
+      "fwd_copy_us": 156.94618225097656,
+      "bwd_dlpack_us": 33.65352749824524,
+      "bwd_copy_us": 185.16883254051208
+    },
+    {
+      "nodes": 16384,
+      "boundary": "1.0 MB",
+      "fwd_dlpack_us": 18.536895513534546,
+      "fwd_copy_us": 352.13783383369446,
+      "bwd_dlpack_us": 121.15016579627991,
+      "bwd_copy_us": 589.80792760849
+    },
+    {
+      "nodes": 65536,
+      "boundary": "4.0 MB",
+      "fwd_dlpack_us": 19.30028200149536,
+      "fwd_copy_us": 1027.8668999671936,
+      "bwd_dlpack_us": 456.6006362438202,
+      "bwd_copy_us": 1922.202706336975
+    }
+  ]
+}

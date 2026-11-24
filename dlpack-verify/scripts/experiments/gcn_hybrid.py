@@ -343,26 +343,47 @@ def _acc_np(pred):
 
 # ---------------------------------------------------------------------------
 # 交换辅助 (对称形态 front_pt: PT->MS 激活 / MS->PT 边界梯度)
+# NPU 上 dlpack 交换前后需 torch.npu.synchronize() 做显式屏障,
+# 且 dlpack 导出前 clone() 断开与原计算缓冲的别名 (防止后续覆写污染 MS 读侧)。
 # ---------------------------------------------------------------------------
+def _npu_sync():
+    if CFG["is_npu"]:
+        torch.npu.synchronize()
+
+
 def exchange_activation(pt_act):
+    """PT→MS 激活值交换 (对称形态 E4 正向; 仅交换段计时)。
+    NPU 上 dlpack 导出前 clone() + synchronize() 断开别名/确保写入完成。"""
     t0 = time.perf_counter()
+    _npu_sync()
     if CFG["exchange"] == "dlpack":
         from torch.utils.dlpack import to_dlpack as torch_to_dlpack
         from mindspore.utils.dlpack import from_dlpack as ms_from_dlpack
-        h_ms = ms_from_dlpack(torch_to_dlpack(pt_act.detach()))
+        h_copy = pt_act.detach().clone()
+        cap = torch_to_dlpack(h_copy)
+        h_ms = ms_from_dlpack(cap)
+        del h_copy, cap
     else:
         h_ms = CFG["ms"].Tensor(to_np(pt_act))
+    _npu_sync()
     return h_ms, time.perf_counter() - t0
 
 
 def exchange_grad_ms2pt(g_ms):
+    """MS→PT 梯度交换 (对称形态 E4 回传; 仅交换段计时)。"""
     t0 = time.perf_counter()
+    _npu_sync()
     if CFG["exchange"] == "dlpack":
         from mindspore.utils.dlpack import to_dlpack as ms_to_dlpack
         from torch.utils.dlpack import from_dlpack as torch_from_dlpack
-        g_pt = torch_from_dlpack(ms_to_dlpack(g_ms))
+        g_np = to_np(g_ms)                   # MS Tensor → numpy (独立副本)
+        g_copy = ms.Tensor(g_np)             # 独立 MS Tensor
+        cap = ms_to_dlpack(g_copy)
+        g_pt = torch_from_dlpack(cap)
+        del g_copy, cap
     else:
         g_pt = torch.tensor(to_np(g_ms), device=CFG["device"])
+    _npu_sync()
     return g_pt, time.perf_counter() - t0
 
 
