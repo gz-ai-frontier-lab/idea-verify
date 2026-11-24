@@ -1234,12 +1234,13 @@ def main():
     for k, v in repl.items():
         report = report.replace(k, v)
 
-    out_name = "验证报告.md" if official else "验证报告_draft.md"
+    out_name = ("验证报告_autogen.md" if official
+                else "验证报告_autogen_draft.md")   # 手写交付版 docs/验证报告.md 不覆盖
     out_path = os.path.join(PROJECT, "docs", out_name)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(report)
     print("=" * 78)
-    print(f"最终报告已生成: {out_path}")
+    print(f"自动核对版报告已生成: {out_path} (交付版 docs/验证报告.md 为手写维护)")
     print(f"数据来源       : results/{dev}/")
     for p in charts:
         print(f"图表           : {p}")

@@ -33,8 +33,8 @@ dlpack-verify/
 │       └── unwrap_md.py        #   md 段落解包 (make_report 内部依赖)
 ├── data/Cora/                  # 数据集 (离线加载, 服务器免联网)
 ├── docs/                       # 文档
-│   ├── 验证报告.md             #   最终交付报告 (npu 数据齐备时由 make_report.py 生成)
-│   ├── 验证报告_draft.md       #   草稿 (数据不全时生成, 保护正式报告)
+│   ├── 验证报告.md             #   最终交付报告 (手写维护, 博文风格; 数据源自 results/)
+│   ├── 验证报告_autogen.md     #   自动核对版 (make_report.py 生成, 与手写版数据同源)
 │   └── 代码解读.md             #   verify_dlpack.py 代码解读 (Mermaid 图)
 ├── charts/                     # 报告引用的证据图 ×4 (make_report.py 生成)
 ├── results/                    # 运行产物 (脚本自动落盘, 按设备分目录)
@@ -137,7 +137,7 @@ python scripts/experiments/run_all.py
 python scripts\report\make_report.py
 ```
 
-产出:`charts/` 四张证据图(GCN 三臂曲线 / E2vE3 主对照 / 判据评分卡 / bench 尺寸扫描)+ `docs\验证报告.md`(实测数字自动填充)+ `results\<时间戳>.xlsx`。
+产出:`charts/` 四张证据图(GCN 三臂曲线 / E2vE3 主对照 / 判据评分卡 / bench 尺寸扫描)+ `docs\验证报告_autogen.md`(自动核对版, 与手写交付版 docs\验证报告.md 数据同源)+ `results\<时间戳>.xlsx`。
 
 `make_report.py` 读取 `results/{npu|cpu}/` 下的 `verify_summary.json`、`gcn_summary_{dlpack|copy|dlpack_sym}.json`、`bench_summary.json` 与逐步训练 CSV,**数据优先级 npu > cpu**(有真机摘要时绝不使用 cpu 数据)。正式条件 = npu 的 verify + E2 + E3 三份摘要齐备;缺项时生成 `docs\验证报告_draft.md`(不覆盖正式报告)并在控制台列出补跑命令。
 

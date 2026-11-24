@@ -621,7 +621,7 @@ def eval_sym(ctx):
 # ---------------------------------------------------------------------------
 def report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
            m4, m4_err, m4_ms_err, ref_loss, mix_loss,
-           hist_r_loss, hist_r_val, hist_r_test):
+           hist_r_loss, hist_r_val, hist_r_test, times_r):
     hist = np.array(hist)
     if not np.isfinite(hist).all():
         print("[FATAL] 训练发散 (出现 NaN/Inf): 请降低 --lr 后重试")
@@ -684,6 +684,8 @@ def report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
         "m4_calibration": {"rel_err": float(m4_err), "ms_rel_err": float(m4_ms_err),
                             "rtol": args.rtol, "pass": bool(m4)},
         "ms_ref": {"final_loss": ref_loss_f, "final_test_acc": ref_test,
+                    "lat_ms": float(np.mean(np.array(times_r)[int(len(times_r) * 0.2):])
+                                    * 1e3),
                     "converged": bool(hist_r_loss[-1] < hist_r_loss[0])},
         "eq": {"final_ratio": eq_final, "acc_gap_pt": float(acc_gap),
                 "pass": eq_pass},
@@ -780,7 +782,7 @@ def main():
     m4, m4_err, m4_ms_err, ref_loss, mix_loss = calibrate_m4(ctx, args)
 
     print(f"\n--- B0 参照臂: 纯 MindSpore 两层 GCN ({args.epochs} epochs) ---")
-    hist_r_loss, hist_r_val, hist_r_test, _ = train_ref(ctx, args)
+    hist_r_loss, hist_r_val, hist_r_test, times_r = train_ref(ctx, args)
 
     sym = args.topology == "front_pt"
     if sym:
@@ -813,7 +815,7 @@ def main():
 
     return report(args, hist, hist_val, hist_test, times, eval_v, fwd_us, bwd_us,
                   m4, m4_err, m4_ms_err, ref_loss, mix_loss,
-                  hist_r_loss, hist_r_val, hist_r_test)
+                  hist_r_loss, hist_r_val, hist_r_test, times_r)
 
 
 if __name__ == "__main__":
