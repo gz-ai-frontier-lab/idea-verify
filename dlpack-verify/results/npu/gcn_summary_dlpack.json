@@ -12,33 +12,33 @@
   "topology": "front_ms",
   "rtol": 0.005,
   "results": {
-    "initial_loss": 1.950649380683899,
+    "initial_loss": 1.9506491422653198,
     "final_loss": 0.009854846633970737,
     "final_val_acc": 0.772,
     "final_test_acc": 0.803,
-    "lat_ms": 270.7095740828663,
-    "exchange_fwd_us": 51.134005188941956,
-    "exchange_bwd_us": 88.18313479423523,
-    "exchange_ratio_pct": 0.05146369146904687,
+    "lat_ms": 271.9962783623487,
+    "exchange_fwd_us": 51.40822380781174,
+    "exchange_bwd_us": 83.94356817007065,
+    "exchange_ratio_pct": 0.04976236910034816,
     "converged": true,
     "m4": true
   },
   "m4_calibration": {
-    "rel_err": 7.426288902934175e-06,
+    "rel_err": 1.0386684152763337e-05,
     "ms_rel_err": 9.06204804778099e-05,
     "rtol": 0.005,
     "pass": true
   },
   "ms_ref": {
-    "final_loss": 0.009825511835515499,
+    "final_loss": 0.009825515560805798,
     "final_test_acc": 0.803,
     "converged": true
   },
   "eq": {
-    "final_ratio": 1.002985574588512,
+    "final_ratio": 1.002985194312036,
     "acc_gap_pt": 0.0,
     "pass": true
   },
-  "initial_consistency_dev": 1.222252350742668e-07,
-  "generated_at": "2026-11-24T01:24:17"
+  "initial_consistency_dev": 0.0,
+  "generated_at": "2026-11-24T02:27:47"
 }

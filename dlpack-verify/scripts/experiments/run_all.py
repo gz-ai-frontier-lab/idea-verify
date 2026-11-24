@@ -43,6 +43,7 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
     stop = threading.Event()
     state = {"cards": None, "type_of": {}}   # card -> 已探明的 -t 类型
     raw_logged = set()                       # 已落盘过 raw 输出的 card
+    dead = {}                                # card -> 连续全失败周期数
 
     def run(cmd):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -94,7 +95,7 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
                         state["cards"] = ["0", "1", "40", "41"]
                         f.write(f"{time.time()},,,,0,"
                                 f"\"card discovery failed: {type(e).__name__}: {e}\"\n")
-                for card in state["cards"]:
+                for card in list(state["cards"]):
                     typ = state["type_of"].get(card)
                     got = ("", "", "", 0, "")
                     for t in ([typ] if typ else ["usages", "common", "board"]):
@@ -112,6 +113,17 @@ def start_smi_sampler(dev, tag, out_dir, interval=1.0):
                             break
                         got = (cmd_str, "", "", 0, out)
                     cmd_str, a, h, ok, out = got
+                    if ok == 1:
+                        dead[card] = 0
+                    else:
+                        # 连续 3 个周期全失败视为不存在的卡 (Invalid card id),
+                        # 剔除轮询 (探测发现的 id 可能是表内其他数字列的误匹配)
+                        dead[card] = dead.get(card, 0) + 1
+                        if dead[card] >= 3:
+                            f.write(f"{time.time()},{card},,,,0,\"excluded: "
+                                    f"连续 3 个采样周期全失败, 剔除该 card\"\n")
+                            state["cards"].remove(card)
+                            continue
                     raw = ""
                     if card not in raw_logged:
                         raw_logged.add(card)

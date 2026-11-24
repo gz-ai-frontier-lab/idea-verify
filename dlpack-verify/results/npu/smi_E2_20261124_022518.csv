@@ -1,0 +1,153 @@
+unix_ts,card,cmd,aicore_pct,hbm_pct,ok,raw
+1795487119.1270185,,'npu-smi info',,,,1,"cards discovered: 1,0"
+1795487119.6827137,1,'npu-smi info -t usages -i 1',0.0,5.0,1,"NPU ID                         : 1
+	Chip Count                     : 1
+
+	DDR Capacity(MB)               : 0
+	DDR Usage Rate(%)              : 0
+	DDR Hugepages Total(page)      : 0
+	DDR Hugepages Usage Rate(%)    : 0
+	HBM Capacity(MB)               : 65536
+	HBM Usage Rate(%)              : 5
+	Aicore Usage Rate(%)           : 0
+	Aivector Usage Rate(%)         : 0
+	Aicpu Usage Rate(%)            : 0
+	Ctrlcpu Usage Rate(%)          : 9
+	DDR Bandwidth Usage Rate(%)    : 0
+	HBM Bandwidth Usage Rate(%)    : 0
+	Chip ID                        : 0"
+1795487120.7830698,0,'npu-smi info -t board -i 0',,,0,"Invalid card id.
+Error parameter of -i
+Usage: npu-smi info <watch|proc|-h|-m|-l|-t type> [Options...]
+
+Commands:
+       watch          Show all device's status in scrolling format
+       proc           Show device's matrix process status in scrolling format
+       -h, --help     Show this help text and exit
+       -m             Show all device's mapping information
+       -l             Show all device's topology information
+       -t type        Show information for type
+                      type: board, flash, memory, usages, sensors, temp, power, volt, mac-addr,
+                            common, health, product, ecc, ip, sys-time, i2c_check, work-mode,
+                            ecc-enable, p2p-enable, ssh-enable, license, customized-info,
+                            device-share, nve-level, aicpu-config, pcie-err, mcu-monitor,
+                            err-count, boot-area, vnpu-mode, info-vnpu, vnpu-svm, cpu-num-cfg,
+                            first-power-on-date, proc-mem"
+1795487122.354658,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487123.4875507,0,'npu-smi info -t board -i 0',,,0,
+1795487125.0022418,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487126.1082132,0,'npu-smi info -t board -i 0',,,0,
+1795487127.62339,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487128.7831364,0,'npu-smi info -t board -i 0',,,0,
+1795487130.295256,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487131.4105756,0,'npu-smi info -t board -i 0',,,0,
+1795487132.9263978,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487134.0637186,0,'npu-smi info -t board -i 0',,,0,
+1795487135.5739648,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487136.7636974,0,'npu-smi info -t board -i 0',,,0,
+1795487138.2756433,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487139.4109735,0,'npu-smi info -t board -i 0',,,0,
+1795487140.9270554,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487142.1146824,0,'npu-smi info -t board -i 0',,,0,
+1795487143.6596465,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487145.2121918,0,'npu-smi info -t board -i 0',,,0,
+1795487146.8521447,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487148.45403,0,'npu-smi info -t board -i 0',,,0,
+1795487149.9634783,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487151.075867,0,'npu-smi info -t board -i 0',,,0,
+1795487152.6020615,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487153.8022885,0,'npu-smi info -t board -i 0',,,0,
+1795487155.3171,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487156.4475758,0,'npu-smi info -t board -i 0',,,0,
+1795487157.966478,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487159.100626,0,'npu-smi info -t board -i 0',,,0,
+1795487160.6159773,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487161.758312,0,'npu-smi info -t board -i 0',,,0,
+1795487163.2598236,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487164.3952875,0,'npu-smi info -t board -i 0',,,0,
+1795487165.898754,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487167.0581508,0,'npu-smi info -t board -i 0',,,0,
+1795487168.5759168,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487169.7060661,0,'npu-smi info -t board -i 0',,,0,
+1795487171.2106414,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487172.3215938,0,'npu-smi info -t board -i 0',,,0,
+1795487173.831036,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487174.9696734,0,'npu-smi info -t board -i 0',,,0,
+1795487176.482725,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487177.611634,0,'npu-smi info -t board -i 0',,,0,
+1795487179.208335,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487180.4369001,0,'npu-smi info -t board -i 0',,,0,
+1795487181.9319654,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487183.040371,0,'npu-smi info -t board -i 0',,,0,
+1795487184.5887284,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487185.737992,0,'npu-smi info -t board -i 0',,,0,
+1795487187.2326922,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487188.3544488,0,'npu-smi info -t board -i 0',,,0,
+1795487189.871811,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487191.028954,0,'npu-smi info -t board -i 0',,,0,
+1795487192.5441108,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487193.6956863,0,'npu-smi info -t board -i 0',,,0,
+1795487195.2161276,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487196.3702335,0,'npu-smi info -t board -i 0',,,0,
+1795487197.8881881,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487199.02665,0,'npu-smi info -t board -i 0',,,0,
+1795487200.5760348,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487201.7155862,0,'npu-smi info -t board -i 0',,,0,
+1795487203.2280896,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487204.3579943,0,'npu-smi info -t board -i 0',,,0,
+1795487205.9200113,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487207.052136,0,'npu-smi info -t board -i 0',,,0,
+1795487208.5679812,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487209.7035654,0,'npu-smi info -t board -i 0',,,0,
+1795487211.2010627,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487212.3360083,0,'npu-smi info -t board -i 0',,,0,
+1795487213.860137,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487214.9327855,0,'npu-smi info -t board -i 0',,,0,
+1795487216.421724,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487217.4931831,0,'npu-smi info -t board -i 0',,,0,
+1795487218.9884095,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487220.0677986,0,'npu-smi info -t board -i 0',,,0,
+1795487221.5567918,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487222.6760604,0,'npu-smi info -t board -i 0',,,0,
+1795487224.192209,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487225.331635,0,'npu-smi info -t board -i 0',,,0,
+1795487226.8550777,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487227.9604192,0,'npu-smi info -t board -i 0',,,0,
+1795487229.4712281,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487230.5967307,0,'npu-smi info -t board -i 0',,,0,
+1795487232.1123912,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487233.2456496,0,'npu-smi info -t board -i 0',,,0,
+1795487234.748217,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487235.8639534,0,'npu-smi info -t board -i 0',,,0,
+1795487237.502139,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487238.6284165,0,'npu-smi info -t board -i 0',,,0,
+1795487240.1323748,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487241.2529402,0,'npu-smi info -t board -i 0',,,0,
+1795487242.7683804,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487243.9026716,0,'npu-smi info -t board -i 0',,,0,
+1795487245.421784,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487246.5512893,0,'npu-smi info -t board -i 0',,,0,
+1795487248.090749,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487249.234102,0,'npu-smi info -t board -i 0',,,0,
+1795487250.7737434,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487251.9203198,0,'npu-smi info -t board -i 0',,,0,
+1795487253.4443443,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487254.562783,0,'npu-smi info -t board -i 0',,,0,
+1795487256.0803392,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487257.2045012,0,'npu-smi info -t board -i 0',,,0,
+1795487258.7125254,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487259.8298767,0,'npu-smi info -t board -i 0',,,0,
+1795487261.3323727,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487262.4627972,0,'npu-smi info -t board -i 0',,,0,
+1795487263.980438,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487265.113902,0,'npu-smi info -t board -i 0',,,0,
+1795487266.6388533,1,'npu-smi info -t usages -i 1',0.0,6.0,1,
+1795487267.779025,0,'npu-smi info -t board -i 0',,,0,
+1795487269.2905629,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487270.4158213,0,'npu-smi info -t board -i 0',,,0,
+1795487271.9285617,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487273.0519578,0,'npu-smi info -t board -i 0',,,0,
+1795487274.5686784,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487275.682509,0,'npu-smi info -t board -i 0',,,0,
+1795487277.1970644,1,'npu-smi info -t usages -i 1',0.0,5.0,1,
+1795487278.318066,0,'npu-smi info -t board -i 0',,,0,

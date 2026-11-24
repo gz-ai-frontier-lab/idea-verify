@@ -1,0 +1,44 @@
+{
+  "kind": "gcn_hybrid",
+  "version": 1,
+  "device": "npu:0",
+  "model": "GCN(Cora)",
+  "hidden": 16,
+  "epochs": 200,
+  "lr": 0.01,
+  "weight_decay": 0.0005,
+  "seed": 42,
+  "exchange": "dlpack",
+  "topology": "front_pt",
+  "rtol": 0.005,
+  "results": {
+    "initial_loss": 1.9506491422653198,
+    "final_loss": 0.009825519286096096,
+    "final_val_acc": 0.77,
+    "final_test_acc": 0.803,
+    "lat_ms": 16.96684444323182,
+    "exchange_fwd_us": 783.778727054596,
+    "exchange_bwd_us": 690.213181078434,
+    "exchange_ratio_pct": 8.687484069679288,
+    "converged": true,
+    "m4": true
+  },
+  "m4_calibration": {
+    "rel_err": 9.062869503395632e-05,
+    "ms_rel_err": 7.250164344441146e-05,
+    "rtol": 0.005,
+    "pass": true
+  },
+  "ms_ref": {
+    "final_loss": 0.009825355373322964,
+    "final_test_acc": 0.803,
+    "converged": true
+  },
+  "eq": {
+    "final_ratio": 1.0000166826304906,
+    "acc_gap_pt": 0.0,
+    "pass": true
+  },
+  "initial_consistency_dev": 0.0,
+  "generated_at": "2026-11-24T02:32:12"
+}

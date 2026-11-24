@@ -8,26 +8,26 @@
     {
       "nodes": 2708,
       "boundary": "169 KB",
-      "fwd_dlpack_us": 19.42351460456848,
-      "fwd_copy_us": 148.96869659423828,
-      "bwd_dlpack_us": 34.70703959465027,
-      "bwd_copy_us": 174.495130777359
+      "fwd_dlpack_us": 19.19880509376526,
+      "fwd_copy_us": 150.66519379615784,
+      "bwd_dlpack_us": 33.87674689292908,
+      "bwd_copy_us": 180.0873875617981
     },
     {
       "nodes": 16384,
       "boundary": "1.0 MB",
-      "fwd_dlpack_us": 19.040852785110474,
-      "fwd_copy_us": 394.36161518096924,
-      "bwd_dlpack_us": 121.33538722991943,
-      "bwd_copy_us": 594.3179130554199
+      "fwd_dlpack_us": 19.01298761367798,
+      "fwd_copy_us": 406.1277210712433,
+      "bwd_dlpack_us": 121.63206934928894,
+      "bwd_copy_us": 624.4553625583649
     },
     {
       "nodes": 65536,
       "boundary": "4.0 MB",
-      "fwd_dlpack_us": 18.87872815132141,
-      "fwd_copy_us": 1158.2857370376587,
-      "bwd_dlpack_us": 449.9322175979614,
-      "bwd_copy_us": 1997.0391690731049
+      "fwd_dlpack_us": 19.50487494468689,
+      "fwd_copy_us": 1188.0628764629364,
+      "bwd_dlpack_us": 448.49514961242676,
+      "bwd_copy_us": 2033.777832984924
     }
   ]
 }
