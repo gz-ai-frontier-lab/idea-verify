@@ -137,7 +137,7 @@ python scripts\report\make_report.py
 
 `make_report.py` 读取 `results/{npu|cpu}/` 下的 `verify_summary.json`、`gcn_summary_{dlpack|copy|dlpack_sym}.json`、`bench_summary.json` 与逐步训练 CSV,**数据优先级 npu > cpu**(有真机摘要时绝不使用 cpu 数据);缺项时对应图表以"待复测"占位,并在控制台列出补跑命令。
 
-## 5. 判读要点(判据体系:正确性 C1~C4 / 性能 P1~P2 / 通用性 G1)
+## 5. 判读要点(判据体系:正确性 C1~C4 / 通用性 G1; 性能 P1~P2 为参考项,以实际模型口径判定)
 
 **基线**:B0 = MS 参照臂(纯 MindSpore 两层 GCN,每次运行同跑)为**唯一基线**;B1(纯 PyTorch)不做——那是迁移终点的实现工作,不在验证范围。
 
@@ -148,7 +148,7 @@ python scripts\report\make_report.py
 - **C3 稀疏参数完整性**:交换路径上未访问 Embedding 行梯度恒零、稀疏更新后零变化(E1 STEP 11);
 - **C4 收敛曲线一致性(必须项)**:GCN 规模下逐位一致不可达——一致性口径 = **ulp 级 ≤1e-5 + Accuracy 曲线趋势重合**(浮点归约顺序噪声,非交换差异);混合 vs B0 为**统计等价**:loss 比 ∈[0.5,2.0]、test Accuracy 差 ≤1.5pt、曲线形态一致;过拟合检查同步进行;
 
-性能:
+性能参考(不作判据,GCN 数字仅参考样本,以实际模型口径判定):
 
 - **P1 交换信噪比**:交换段占单 epoch 训练耗时比例(<1% 为佳);GCN on Cora 为小图全批训练,单 epoch 仅几~几百 ms,占比天然偏高,以真实 GNN 单 batch 口径评估;
 - **P2 epoch 耗时总账**:接入真实 GNN 代码后 ≥3 epoch 耗时 ≤B0×1.2 为 PASS;本验证阶段按交换占比摊薄披露;
