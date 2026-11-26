@@ -474,14 +474,24 @@ def calibrate_m4(ctx, args):
 # B0 参照臂 / 混合臂 训练
 # ---------------------------------------------------------------------------
 def train_ref(ctx, args):
+    """B0 参照臂: 纯 MindSpore 两层 GCN (聚合+conv1+ReLU -> 聚合+conv2 -> 交叉熵)。
+
+    唯一基线: 与混合臂同种子/同初始化/同数据/同超参, 差异只有"是否跨框架"。
+    全批训练: Cora 全部节点每步参与, 每个 epoch 恰好一次参数更新。
+    """
     ms = CFG["ms"]
     params = (ctx["w1_b0"], ctx["b1_b0"], ctx["w2_b0"], ctx["b2_b0"])
-    opt = MsAdam(params, args.lr, args.weight_decay)
+    opt = MsAdam(params, args.lr, args.weight_decay)   # MS 侧 Adam: 收梯度列表, 内部 set_data 写回 Parameter
     masks = ctx["masks"]
     hist_loss, hist_val, hist_test, times = [], [], [], []
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
+        # ref_fn = 整模型的"普通前向函数"(输入/参数显式入参, 不依赖框架状态);
+        # mindspore.vjp(fn, *inputs) 一次拿到 (前向输出, 反向函数)。
+        # PYNATIVE 模式下 MS 张量没有自动梯度图, 反向必须由 vjp 驱动
         loss, bwd_fn = vjp(ctx["ref_fn"], ctx["x_ms"], *params)
+        # 标量 loss 的反向只收一个标量种子 (= dLoss/dLoss = 1),
+        # 一次返回 fn 全部入参的梯度 (dx, dw1, db1, dw2, db2); 取 [1:] 丢掉对输入的 dx
         grads = bwd_fn(ms.Tensor(1.0))[1:]
         opt.step(grads)
         times.append(time.perf_counter() - t0)
@@ -506,6 +516,11 @@ def eval_mixed(ctx):
 
 
 def train_mixed(ctx, args):
+    """形态 A (E2/E3): MS 前段 + PT 后段。
+
+    E2/E3 唯一区别在交换实现 (DLPack 零拷贝 vs host 拷贝), 其余代码逐行相同
+    —— 这是"选对"主对照的归因基础。
+    """
     ms = CFG["ms"]
     ms_front_fn, w1_ms, b1_ms = ctx["ms_front_fn"], ctx["w1_ms"], ctx["b1_ms"]
     w2_t, b2_t, opt_pt = ctx["w2_t"], ctx["b2_t"], ctx["opt_pt"]
@@ -520,20 +535,31 @@ def train_mixed(ctx, args):
     print(f"  [验证] epoch     0  val_acc={v0['val']:.4f}  test_acc={v0['test']:.4f}")
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
+        # ---- MS 前段: 聚合 + conv1 + ReLU ----
+        # ms_front_fn 是"MS 前段的普通前向函数"; vjp 一次拿到前向输出 ms_out
+        # 和反向函数 bwd_fn (此时不求导, MS 侧反向推迟到第 ⑥ 步之后)
         ms_out, bwd_fn = vjp(ms_front_fn, ctx["x_ms"], w1_ms, b1_ms)
+        # ---- 边界交换 (正向): E2=DLPack 零拷贝视图 / E3=host 拷贝, 其余代码逐行相同 ----
         pt_input, dt_f = exchange_forward(ms_out)
         t_fwd += dt_f
+        # ---- PT 后段: conv2 + 交叉熵 ----
+        # 把"外来张量"注册成 PT 计算图的叶子, PT 才会对它求 grad —— 这是桥接的关键一步
         pt_input.requires_grad_(True)
         logits = _pt_head(pt_input, w2_t, b2_t)
         idx = torch.tensor(ctx["idx_np"], device=CFG["device"])
         loss = torch.nn.functional.cross_entropy(logits[idx], ctx["y_t"][idx])
+        # PT 局部反向: 只反传 PT 后段, 停在边界 —— pt_input.grad = dLoss/d(ms_out)
         loss.backward()
+        # ---- 边界交换 (反向): pt_input.grad 先 detach 脱离 PT 图, 打包成 MS 侧张量 sens ----
+        # sens = 上游梯度 (MindSpore 官方称呼), 即 MS 前段反向所需的 dLoss/d(ms_out)
         sens, dt_b = exchange_backward(pt_input)
         t_bwd += dt_b
+        # MS 侧 vjp 反向: 以 sens 为上游梯度, 一次得前段参数梯度, 不重执行前向
         _, dw1, db1 = bwd_fn(sens)
-        opt_pt.step()
+        # ---- 两侧参数在同一步内联合更新 ----
+        opt_pt.step()          # torch Adam 更新 PT 后段参数
         opt_pt.zero_grad()
-        opt_ms.step([dw1, db1])
+        opt_ms.step([dw1, db1])  # MS 侧 Adam 更新前段参数 (内部 set_data 写回)
         times.append(time.perf_counter() - t0)
         v = float(loss.item())
         acc = eval_mixed(ctx)
@@ -554,6 +580,10 @@ def train_mixed(ctx, args):
 # 对称形态 (front_pt): PT 聚合+conv1+ReLU ──交换──▶ MS conv2+CE
 # ---------------------------------------------------------------------------
 def train_sym(ctx, args):
+    """形态 B (E4): PT 前段 + MS 后段, 形态 A 的镜像。
+
+    方向翻转验证桥接机制与切分方向无关 —— 方案通用性的第一半 (G1)。
+    """
     ms = CFG["ms"]
     w1_t, b1_t = ctx["w1_t"], ctx["b1_t"]
     opt_sym_pt = ctx["opt_sym_pt"]
@@ -574,20 +604,31 @@ def train_sym(ctx, args):
     for epoch in range(1, args.epochs + 1):
         t0 = time.perf_counter()
         opt_sym_pt.zero_grad()
-        h_act = torch.relu(_agg_pt(x_t) @ w1_t + b1_t)   # PT 前段 (在图内)
-        h_ms, dt_f = exchange_activation(h_act)          # ① 交换 (PT→MS, 节点表示)
+        # ---- PT 前段: 聚合 + conv1 + ReLU (普通 torch 计算图) ----
+        # h_act 必须保持在计算图内 —— 最后要用它做 backward(gradient=...) 续上前段反向
+        h_act = torch.relu(_agg_pt(x_t) @ w1_t + b1_t)
+        # ---- 边界交换 (正向, PT→MS): dlpack 只是视图, 不复制的话 MS 读取时
+        # PT 可能已覆写同一块显存; 故 clone 独立副本 + 流同步, 确保写入完成再交棒 ----
+        h_ms, dt_f = exchange_activation(h_act)
         t_fwd += dt_f
-        # ② MS 后段 conv2+CE: vjp(标量 sens=1) 一次得 边界梯度 + fc2 梯度
+        # ---- MS 后段: conv2 + 交叉熵 (函数式前向) ----
+        # vjp 一次拿到 loss 和反向函数; 反向推迟到拿到种子之后
         loss, bwd_fn = vjp(lambda h, w2, b2: _ms_tail_ce(h, w2, b2, y_ms, idx_ms),
                            h_ms, w2_ms, b2_ms)
+        # 标量种子 1.0 一次返回全部入参梯度: grads[0]=dLoss/d(h_ms)=边界梯度,
+        # grads[1]/grads[2]=MS 后段参数梯度 dW2/db2
         grads = bwd_fn(ms.Tensor(1.0))
         g_ms, g_w2, g_b2 = grads[0], grads[1], grads[2]
-        g_pt, dt_b = exchange_grad_ms2pt(g_ms)           # ③ 交换 (MS→PT, 边界梯度)
+        # ---- 边界交换 (反向, MS→PT): 搬运边界梯度; dlpack 输出可能落 CPU, 强制搬回 NPU ----
+        g_pt, dt_b = exchange_grad_ms2pt(g_ms)
         t_bwd += dt_b
-        h_act.backward(gradient=g_pt)                    # ④ 以外部梯度种子回传 PT 前段
-        opt_sym_pt.step()                                # ⑤ 两侧更新
+        # ---- 梯度链在边界手工接通: 不用标量 1, 而用跨框架传来的边界梯度作种子 ----
+        # 驱动 PT 前段继续反传 (等价于 PT 后段已算完 dLoss/d(h_act))
+        h_act.backward(gradient=g_pt)
+        # ---- 两侧参数在同一步内联合更新 ----
+        opt_sym_pt.step()                    # torch Adam 更新 PT 前段参数
         opt_sym_pt.zero_grad()
-        opt_ms_sym.step([g_w2, g_b2])                    # MS 侧 Adam 更新
+        opt_ms_sym.step([g_w2, g_b2])        # MS 侧 Adam 更新后段参数
 
         times.append(time.perf_counter() - t0)
         v = float(to_np(loss))

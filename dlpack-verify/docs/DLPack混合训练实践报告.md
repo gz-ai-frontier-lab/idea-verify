@@ -159,19 +159,25 @@ GCN 的两层结构是 `H = ReLU(Agg(X)·W1 + b1)`、`logits = Agg(H)·W2 + b2`�
 
 ```mermaid
 flowchart TB
-    subgraph S1["形态 A · E2/E3：MS 前段 + PT 后段"]
+    subgraph G0["B0 · 纯 MindSpore · 不做任何改造"]
         direction LR
-        A1["MindSpore<br/>聚合 + conv1 + ReLU"] ==>|"边界张量 H 2708x16<br/>DLPack 零拷贝交换"| B1["PyTorch<br/>conv2 + 交叉熵"]
-        B1 -.->|"梯度桥接<br/>pt_input.grad 转 sens 回传"| A1
+        M0["MindSpore 单框架<br/>聚合 + conv1 + ReLU<br/>聚合 + conv2 + 交叉熵"] --- L0["前向/反向/参数更新<br/>全在本框架内闭环<br/>无边界 · 无交换 · 无桥接"]
     end
-    subgraph S2["形态 B · E4：PT 前段 + MS 后段"]
+    subgraph GA["形态 A · E2/E3 · 改造点 = conv1 后的边界"]
         direction LR
-        A2["PyTorch<br/>聚合 + conv1 + ReLU"] ==>|"边界张量 H 2708x16<br/>DLPack 零拷贝交换"| B2["MindSpore<br/>conv2 + 交叉熵"]
-        B2 -.->|"梯度桥接<br/>vjp 边界梯度回传"| A2
+        MA["MindSpore 前段<br/>聚合 + conv1 + ReLU"] ==>|"正向: 边界张量 H 交接<br/>E2 = DLPack 零拷贝视图<br/>E3 = host 拷贝 NPU↔host 往返"| PA["PyTorch 后段<br/>conv2 + 交叉熵"]
+        PA -.->|"反向: 梯度桥接<br/>pt_input.grad 打包成 sens 回 MS"| MA
     end
+    subgraph GB["形态 B · E4 · 边界镜像翻转"]
+        direction LR
+        PB["PyTorch 前段<br/>聚合 + conv1 + ReLU"] ==>|"正向: 激活值交接<br/>DLPack + 独立副本/流同步"| MB["MindSpore 后段<br/>conv2 + 交叉熵"]
+        MB -.->|"反向: 梯度桥接<br/>vjp 取边界梯度回 PT"| PB
+    end
+    G0 -.->|"改造动作 = 切一刀<br/>已迁移段换 PT 执行<br/>算子/超参/数据全部不变"| GA
+    GA -.->|"改造动作 = 边界镜像<br/>谁在前谁在后互换<br/>桥接机制不变"| GB
 ```
 
-两种形态训练时都是**两侧参数在同一步联合更新**（PT `optim.step()` + MS `set_data`/等价 Adam step），虚线即梯度桥接（§4.3）。围绕切分动了五处——其中 #1、#2 是图网络场景特有，#3~#5 任意模型通用：
+**读图方式——改的只有边界**：B0 与混合臂的唯一差异就是图中加粗的边界。形态 A 在 conv1 后把链切成两段，多一次正向交换与一次反向桥接，其余算子、超参、数据完全不变；E2/E3 仅交换实现不同（DLPack 零拷贝 vs host 拷贝），交换函数之外的代码逐行同源——这就是"选对"对照的归因基础。形态 B 只是把边界镜像翻转（谁在前谁在后互换），桥接机制不变。两种形态训练时都是**两侧参数在同一步联合更新**（PT `optim.step()` + MS 侧 Adam `step`），虚线即梯度桥接（§4.3）。围绕切分动了五处——其中 #1、#2 是图网络场景特有，#3~#5 任意模型通用：
 
 | # | 改造点 | 具体做法 | 为什么 / 踩过的坑 |
 |---|---|---|---|
